@@ -29,26 +29,44 @@ export async function enableNotifications(profileToken: string, permission?: Not
 }> {
   const availability = getNotificationAvailability();
   if (availability === 'unsupported') {
-    return { enabled: false, message: 'Hindi supported ng browser ang alerts.' };
+    return { enabled: false, message: 'Hindi pa supported ng browser na ito ang alerts (gumamit ng Chrome o Safari sa mobile).' };
   }
   if (availability === 'permission-denied') {
-    return { enabled: false, message: 'Naka-block ang alerts sa browser. Magagamit mo pa rin ang room.' };
+    return { enabled: false, message: 'Naka-block ang alerts sa iyong browser settings. I-unblock para makatanggap ng updates.' };
   }
   if (availability === 'missing-key') {
-    return { enabled: false, message: 'Hindi pa naka-set up ang alerts. Magagamit mo pa rin ang room.' };
+    return { enabled: false, message: 'Kasalukuyang ina-activate ang alerts key sa system.' };
   }
 
-  const resolvedPermission = permission || await requestNotificationPermission();
+  let resolvedPermission = permission;
+  if (!resolvedPermission) {
+    try {
+      resolvedPermission = await requestNotificationPermission();
+    } catch {
+      return { enabled: false, message: 'Hindi ma-access ang alert permission sa browser.' };
+    }
+  }
+
   if (resolvedPermission !== 'granted') {
-    return { enabled: false, message: 'Hindi na-enable ang alerts. Magagamit mo pa rin ang room.' };
+    return { enabled: false, message: 'Hindi pinayagan ang notification permission. Magagamit mo pa rin ang room nang normal.' };
   }
 
-  const registration = await navigator.serviceWorker.register('/sw.js');
-  const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: decodeVapidKey(appConfig.vapidPublicKey).buffer as ArrayBuffer,
-  });
+  try {
+    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
 
-  await savePushSubscription(subscription.toJSON(), profileToken);
-  return { enabled: true, message: 'Naka-enable na ang alerts sa browser na ito.' };
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: decodeVapidKey(appConfig.vapidPublicKey).buffer as ArrayBuffer,
+      });
+    }
+
+    await savePushSubscription(subscription.toJSON(), profileToken);
+    return { enabled: true, message: 'Naka-enable na ang live alerts sa browser na ito! ✓' };
+  } catch (err) {
+    console.error('Push notification registration failed:', err);
+    return { enabled: false, message: 'Hindi nakumpleto ang alert setup. Tiyaking naka-HTTPS o pinapayagan ang service workers.' };
+  }
 }

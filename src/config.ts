@@ -8,7 +8,7 @@ const portalPattern = String(import.meta.env.VITE_PORTAL_VOUCHER_URL_PATTERN ?? 
 export const appConfig = {
   supabaseUrl,
   functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1/api` : '',
-  vapidPublicKey: String(import.meta.env.VITE_VAPID_PUBLIC_KEY ?? '').trim(),
+  vapidPublicKey: String(import.meta.env.VITE_VAPID_PUBLIC_KEY ?? 'BJqEzxjzZzeXsUM-3CYyXrkY6omn2XmT2rBNi4tKjAOOe3Lp-CB9qKxcUKJhICTBGQckPvarWCcmdf70TrbMD3Y').trim(),
   helpImageUrl: configuredHelpImageUrl || '/device-id-help.jpg',
   appName: String(import.meta.env.VITE_APP_NAME ?? 'DXTECH PisoWiFi Hub').trim() || 'DXTECH PisoWiFi Hub',
   portalVoucherUrlPattern: portalPattern,

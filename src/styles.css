@@ -4101,6 +4101,213 @@ code {
   color: var(--ink-muted);
 }
 
+
+/* ==========================================================================
+   Share Modal & QR Presentation
+   ========================================================================== */
+.share-dialog-card {
+  width: 100%;
+  max-width: 480px;
+  background: #111a26;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(249, 115, 22, 0.12);
+  position: relative;
+  color: #ffffff;
+}
+
+.qr-presentation-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: #ffffff;
+  border-radius: 14px;
+  margin: 18px 0;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+
+.qr-svg-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 200px;
+  width: 100%;
+  height: auto;
+}
+
+.qr-svg-wrapper svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.qr-scan-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.76rem;
+  color: #475569;
+  font-weight: 700;
+}
+
+.share-url-box {
+  margin: 14px 0 20px 0;
+}
+
+.share-url-label {
+  display: block;
+  font-size: 0.74rem;
+  font-weight: 800;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.share-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.share-url-input {
+  flex: 1;
+  font-size: 0.82rem;
+  font-family: ui-monospace, monospace;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fdba74;
+}
+
+.btn-copy-share {
+  white-space: nowrap;
+  padding: 8px 14px;
+  font-size: 0.82rem;
+}
+
+.share-modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 16px;
+}
+
+/* ==========================================================================
+   PisoWiFi Network Footer Bar
+   ========================================================================== */
+.pisowifi-network-footer {
+  margin-top: 40px;
+  padding: 16px 20px;
+  background: rgba(12, 19, 29, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+}
+
+.footer-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.footer-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+}
+
+.footer-status-pill.is-connected {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.footer-status-pill.is-connected .status-dot {
+  background: #34d399;
+  box-shadow: 0 0 8px #34d399;
+}
+
+.footer-status-pill.is-disconnected {
+  background: rgba(100, 116, 139, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.footer-status-pill.is-disconnected .status-dot {
+  background: #94a3b8;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.footer-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-portal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.btn-portal-pill:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.btn-portal-pill.is-retry {
+  background: rgba(255, 255, 255, 0.08);
+  color: #cbd5e1;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.btn-pwa-install {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(147, 197, 253, 0.35);
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.btn-pwa-install:hover {
+  background: rgba(59, 130, 246, 0.25);
+  transform: translateY(-1px);
+}
 .audit-timestamp {
   font-size: 0.75rem;
   color: var(--ink-muted);

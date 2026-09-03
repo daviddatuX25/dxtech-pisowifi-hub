@@ -39,6 +39,8 @@ import {
 } from './importer';
 import { enableNotifications, getNotificationAvailability, requestNotificationPermission } from './notifications';
 import { toast } from './toast';
+import { generateQrSvg } from './qr';
+import { checkRouterReachability } from './network';
 import type {
   AdminData,
   AdminIssue,
@@ -117,8 +119,14 @@ interface AppState {
   activeClaimedVoucher: { promoName: string; code: string; duration?: string; isDirectLink?: boolean; portalUrl?: string } | null;
   adminPrefillEmail?: string;
   adminPrefillPassword?: string;
+  // Sharing modal state with QR
+  shareModal: { isOpen: boolean; title: string; subtitle: string; url: string; qrSvg: string } | null;
+  // Router connectivity state
+  isRouterConnected: boolean;
+  routerChecking: boolean;
+  // PWA deferred install prompt
+  canInstallPwa: boolean;
 }
-
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('Application root is missing.');
 const appRoot = root;
@@ -162,10 +170,14 @@ const state: AppState = {
   voucherModalLoading: false,
   voucherSearchQuery: '',
   activeClaimedVoucher: null,
+  shareModal: null,
+  isRouterConnected: false,
+  routerChecking: false,
+  canInstallPwa: false,
 };
+
 function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (character) => {
-    if (character === '&') return '&amp;';
     if (character === '<') return '&lt;';
     if (character === '>') return '&gt;';
     if (character === '"') return '&quot;';
@@ -241,7 +253,12 @@ function renderConfigNotice(): string {
 }
 
 function renderOnboarding(): string {
-  return state.onboardingStep === 'form' ? renderOnboardingForm() : renderOnboardingStory();
+  const content = state.onboardingStep === 'form' ? renderOnboardingForm() : renderOnboardingStory();
+  return `
+    ${content}
+    ${renderPisoWifiFooter()}
+    ${renderShareModal()}
+  `;
 }
 
 function renderOnboardingStory(): string {
@@ -596,6 +613,8 @@ function renderHome(): string {
           </button>
         </nav>
         ${state.homeTab === 'promos' ? renderPromoWorkspace() : renderIssueWorkspace()}
+        ${renderPisoWifiFooter()}
+        ${renderShareModal()}
       </section>
     </main>
   `;
@@ -661,6 +680,84 @@ function renderVoucherDeliveryModal(): string {
         `}
       </div>
     </section>
+  `;
+}
+
+function renderShareModal(): string {
+  const modal = state.shareModal;
+  if (!modal || !modal.isOpen) return '';
+  return `
+    <div class="modal-backdrop" style="position: fixed; inset: 0; background: rgba(0,0,0,0.82); backdrop-filter: blur(6px); z-index: 10001; overflow-y: auto; padding: 20px; display: flex; align-items: center; justify-content: center;">
+      <section class="share-dialog-card" aria-labelledby="share-modal-title">
+        <div class="inline-request-head">
+          <div class="inline-head-title">
+            <span class="badge-claim">${icon(Icons.Share2, 'badge-icon-svg', 13)} I-SHARE ANG PROMO</span>
+            <h3 id="share-modal-title">${escapeHtml(modal.title)}</h3>
+            <p>${escapeHtml(modal.subtitle)}</p>
+          </div>
+          <button class="close-btn-modern" type="button" data-action="close-share-modal" aria-label="Close">${icon(Icons.X, 'close-svg', 16)}</button>
+        </div>
+
+        <div class="qr-presentation-box">
+          <div class="qr-svg-wrapper">
+            ${modal.qrSvg}
+          </div>
+          <span class="qr-scan-hint">${icon(Icons.QrCode, 'hint-icon', 13)} I-scan gamit ang cellphone camera para buksan ang promo</span>
+        </div>
+
+        <div class="share-url-box">
+          <span class="share-url-label">Direct Promo Link</span>
+          <div class="share-input-row">
+            <input type="text" readonly value="${escapeHtml(modal.url)}" class="admin-input share-url-input" />
+            <button class="primary-action btn-copy-share" type="button" data-action="copy-id" data-copy-value="${escapeHtml(modal.url)}">
+              ${icon(Icons.Copy, 'btn-icon-svg', 14)} <span>Kopyahin</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="share-modal-actions">
+          <button class="btn-secondary-modern" type="button" data-action="close-share-modal">Isara</button>
+          <button class="primary-action" type="button" data-action="native-share" data-share-url="${escapeHtml(modal.url)}" data-share-title="${escapeHtml(modal.title)}">
+            ${icon(Icons.Share2, 'btn-icon-svg', 15)} <span>I-share sa Messenger / Apps</span>
+          </button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderPisoWifiFooter(): string {
+  const isConnected = state.isRouterConnected;
+  return `
+    <footer class="pisowifi-network-footer">
+      <div class="footer-container">
+        <div class="footer-status-pill ${isConnected ? 'is-connected' : 'is-disconnected'}">
+          <span class="status-dot"></span>
+          <span>${isConnected ? 'Nakakonek sa DXTECH PisoWiFi (10.0.0.1)' : 'Offline / Hindi nakakonek sa 10.0.0.1'}</span>
+        </div>
+
+        <div class="footer-actions-group">
+          ${isConnected ? `
+            <a href="http://10.0.0.1/" target="_blank" rel="noreferrer" class="btn-portal-pill">
+              <span>Pumunta sa 10.0.0.1 Portal</span>
+              ${icon(Icons.ExternalLink, 'portal-link-icon', 12)}
+            </a>
+          ` : `
+            <button type="button" class="btn-portal-pill is-retry" data-action="recheck-router" ${state.routerChecking ? 'disabled' : ''}>
+              ${icon(Icons.RefreshCw, state.routerChecking ? 'loading-spinner' : 'portal-link-icon', 12)}
+              <span>${state.routerChecking ? 'Sinusuri…' : 'I-check ang 10.0.0.1'}</span>
+            </button>
+          `}
+
+          ${state.canInstallPwa ? `
+            <button type="button" class="btn-pwa-install" data-action="install-pwa">
+              ${icon(Icons.Download, 'pwa-icon', 13)}
+              <span>Save to Desktop / App</span>
+            </button>
+          ` : ''}
+        </div>
+      </div>
+    </footer>
   `;
 }
 
@@ -1096,6 +1193,7 @@ function renderAdminShell(): string {
         ${renderNotice()}
         ${renderAdminTab(data)}
         ${renderVoucherInventoryModal()}
+        ${renderShareModal()}
       </section>
     </main>
   `;
@@ -1720,7 +1818,10 @@ function renderAdminPromotion(promo: AdminPromotion): string {
             ? `${promo.voucherUnassignedCount ?? available} in stock / ${promo.voucherTotalCount ?? totalCapacity} total vouchers`
             : `${available} total open / ${totalCapacity} capacity`}
         </span>
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn-edit-promo" type="button" data-action="share-promo" data-promotion-id="${escapeHtml(promo.id)}">
+            ${icon(Icons.Share2, 'btn-icon-svg', 13)} <span>Share / QR</span>
+          </button>
           ${isVoucher ? `
             <button class="btn-edit-promo" type="button" data-action="view-vouchers" data-promotion-id="${escapeHtml(promo.id)}">
               ${icon(Icons.Layers, 'btn-icon-svg', 13)} <span>Vouchers (${promo.voucherTotalCount ?? 0})</span>
@@ -2739,13 +2840,59 @@ async function handleClick(event: MouseEvent): Promise<void> {
     render();
   } else if (action === 'share-promo' && target.dataset.promotionId) {
     const promoId = target.dataset.promotionId;
-    const promo = state.publicData?.promotions.find((item) => item.id === promoId);
+    const promo = state.publicData?.promotions.find((item) => item.id === promoId)
+      || state.adminData?.promotions.find((item) => item.id === promoId);
     const shareUrl = `${window.location.origin}${window.location.pathname}#/promo/${promoId}`;
+    const title = promo?.name || 'Exclusive Promo';
+    const subtitle = promo?.description || 'I-scan ang QR code o kopyahin ang link para i-share.';
+    const qrSvg = await generateQrSvg(shareUrl);
+    state.shareModal = {
+      isOpen: true,
+      title,
+      subtitle,
+      url: shareUrl,
+      qrSvg,
+    };
+    render();
+  } else if (action === 'close-share-modal') {
+    state.shareModal = null;
+    render();
+  } else if (action === 'native-share') {
+    const url = target.dataset.shareUrl || window.location.href;
+    const title = target.dataset.shareTitle || 'DXTECH Promo';
     if (navigator.share) {
-      navigator.share({ title: promo?.name || 'DXTECH Promo', text: 'Tingnan ang exclusive promo sa DXTECH PisoWiFi Hub!', url: shareUrl }).catch(() => {});
+      try {
+        await navigator.share({ title, text: 'Tingnan ang exclusive promo sa DXTECH PisoWiFi Hub!', url });
+      } catch {
+        // User cancelled share
+      }
     } else {
-      void copyId(shareUrl);
-      setToast(`Na-copy ang promo share link para sa ${promo?.name || 'promo'}!`);
+      void copyId(url);
+      setToast('Na-copy ang promo share link sa clipboard!');
+    }
+  } else if (action === 'recheck-router') {
+    state.routerChecking = true;
+    render();
+    state.isRouterConnected = await checkRouterReachability();
+    state.routerChecking = false;
+    render();
+    if (state.isRouterConnected) {
+      setToast('Connected sa DXTECH PisoWiFi (10.0.0.1)! ✓');
+    } else {
+      setError('Hindi ma-reach ang 10.0.0.1. Tiyaking nakakonek sa PisoWiFi network.');
+    }
+  } else if (action === 'install-pwa') {
+    const deferredPrompt = (window as unknown as { __deferredPwaPrompt?: { prompt: () => void; userChoice: Promise<{ outcome: string }> } }).__deferredPwaPrompt;
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        state.canInstallPwa = false;
+        render();
+        setToast('Na-install ang app sa iyong desktop/home screen!');
+      }
+    } else {
+      setToast('Piliin ang "Add to Home screen" o "Install" sa browser menu.');
     }
   } else if (action === 'home-tab') {
     state.homeTab = target.dataset.tab === 'issues' ? 'issues' : 'promos';
@@ -3016,6 +3163,29 @@ async function bootRoute(): Promise<void> {
   await bootPublic();
 }
 window.addEventListener('hashchange', bootRoute);
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
+
+let deferredPwaPrompt: BeforeInstallPromptEvent | null = null;
+
+window.addEventListener('beforeinstallprompt', (e: Event) => {
+  e.preventDefault();
+  deferredPwaPrompt = e as BeforeInstallPromptEvent;
+  (window as unknown as Record<string, unknown>).__deferredPwaPrompt = deferredPwaPrompt;
+  state.canInstallPwa = true;
+  render();
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredPwaPrompt = null;
+  state.canInstallPwa = false;
+  render();
+  toast.success('Salamat sa pag-install ng DXTECH PisoWiFi Hub!');
+});
+
 appRoot.addEventListener('click', (event) => {
   void handleClick(event);
 });
@@ -3035,6 +3205,12 @@ appRoot.addEventListener('submit', (event) => {
   else if (form.id === 'admin-branch-form') void handleBranchSave(form);
   else if (form.id === 'admin-promo-form') void handlePromotionSave(form);
   else if (form.id === 'bulk-review-form') void handleBulkReview(form, (event as SubmitEvent).submitter);
+});
+
+// Client-side background ping for 10.0.0.1 PisoWiFi connectivity
+void checkRouterReachability().then((reachable) => {
+  state.isRouterConnected = reachable;
+  render();
 });
 
 bootRoute();

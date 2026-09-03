@@ -1,0 +1,18 @@
+{
+  "short_name": "DXTECH Hub",
+  "name": "DXTECH PisoWiFi Hub",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/#/",
+  "background_color": "#101b25",
+  "theme_color": "#101b25",
+  "display": "standalone",
+  "orientation": "portrait",
+  "description": "Branch announcements, exclusive promos, and connection issue reporting for DXTECH PisoWiFi."
+}
