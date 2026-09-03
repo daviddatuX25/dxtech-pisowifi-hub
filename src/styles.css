@@ -2015,39 +2015,242 @@ code {
   font-size: 0.74rem;
 }
 
-.status-pill {
+.status-pill,
+.status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  gap: 6px;
   padding: 4px 12px;
   border-radius: var(--radius-full);
   font-size: 0.76rem;
   font-weight: 800;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   white-space: nowrap;
+  line-height: 1.3;
+  text-transform: capitalize;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .status-pill-approved,
 .status-approved {
-  background: var(--green-subtle);
-  color: var(--green-text);
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.35);
 }
 
 .status-pill-pending,
-.status-pending {
-  background: var(--yellow-subtle);
-  color: var(--yellow-text);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+.status-pending,
+.tag-pending {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.35);
 }
 
 .status-pill-rejected,
 .status-rejected {
-  background: var(--red-subtle);
-  color: var(--red-text);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.35);
 }
 
+/* ==========================================================================
+   Toast Notifications (Top-Right Stack)
+   ========================================================================== */
+.toast-container-top-right {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+  max-width: 420px;
+  width: calc(100vw - 48px);
+}
+
+.toast-card {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  background: rgba(17, 24, 39, 0.96);
+  color: #ffffff;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(12px);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.toast-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.toast-success .toast-indicator {
+  color: #34d399;
+}
+
+.toast-error .toast-indicator {
+  color: #f87171;
+}
+
+.toast-warning .toast-indicator {
+  color: #fbbf24;
+}
+
+.toast-info .toast-indicator {
+  color: #60a5fa;
+}
+
+.toast-content {
+  flex: 1;
+  word-break: break-word;
+  font-weight: 500;
+}
+
+.toast-close {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.toast-close:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ==========================================================================
+   Spinners & Loading Overlays
+   ========================================================================== */
+.loading-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spinSmooth 0.75s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.loading-spinner.spinner-accent {
+  border: 3px solid rgba(249, 115, 22, 0.25);
+  border-top-color: var(--accent);
+  width: 32px;
+  height: 32px;
+}
+
+@keyframes spinSmooth {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.global-loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 17, 24, 0.72);
+  backdrop-filter: blur(6px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeInOverlay 0.2s ease-out forwards;
+}
+
+@keyframes fadeInOverlay {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.global-loading-card {
+  background: rgba(17, 26, 38, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 28px 36px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(249, 115, 22, 0.15);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+}
+
+.global-loading-card strong {
+  color: #ffffff;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.global-loading-card span {
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+}
+
+.loading-block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  color: var(--ink-soft);
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+
+/* ==========================================================================
+   Voucher Tutorial Guide Animated GIF in Modal
+   ========================================================================== */
+.voucher-guide-visual {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 18px 0;
+  text-align: center;
+}
+
+.voucher-guide-gif {
+  max-width: 140px;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #000000;
+}
+
+.voucher-guide-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.8rem;
+  color: #fdba74;
+  font-weight: 600;
+}
 /* ==========================================================================
    Issue Chooser Grid
    ========================================================================== */

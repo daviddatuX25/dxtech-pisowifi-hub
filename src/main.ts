@@ -38,6 +38,7 @@ import {
   type SpreadsheetParseResult,
 } from './importer';
 import { enableNotifications, getNotificationAvailability, requestNotificationPermission } from './notifications';
+import { toast } from './toast';
 import type {
   AdminData,
   AdminIssue,
@@ -202,12 +203,14 @@ function setError(message: string): void {
   state.error = message;
   state.toast = '';
   render();
+  if (message) toast.error(message);
 }
 
 function setToast(message: string): void {
   state.toast = message;
   state.error = '';
   render();
+  if (message) toast.success(message);
   window.setTimeout(() => {
     if (state.toast === message) {
       state.toast = '';
@@ -621,6 +624,11 @@ function renderVoucherDeliveryModal(): string {
         <button class="btn-voucher-copy" type="button" data-action="copy-id" data-copy-value="${escapeHtml(voucher.code)}">
           ${icon(Icons.Copy, 'btn-icon-svg', 15)} <span>Kopyahin ang Code</span>
         </button>
+      </div>
+
+      <div class="voucher-guide-visual">
+        <img src="/voucher-guide.gif" alt="Tutorial animation: Paano gamitin ang voucher sa portal" class="voucher-guide-gif" loading="eager" />
+        <span class="voucher-guide-caption">${icon(Icons.Info, 'caption-icon-xs', 13)} Sundan ang demo sa itaas para mag-connect</span>
       </div>
 
       <div class="voucher-guide-list">
@@ -2209,11 +2217,26 @@ function runMotion(): void {
 
 function render(): void {
   document.title = state.view === 'admin' || state.view === 'admin-login' ? `Admin · ${appConfig.appName}` : appConfig.appName;
-  if (state.view === 'onboarding') appRoot.innerHTML = renderOnboarding();
-  else if (state.view === 'privacy') appRoot.innerHTML = renderPrivacy();
-  else if (state.view === 'home') appRoot.innerHTML = renderHome();
-  else if (state.view === 'admin-login') appRoot.innerHTML = renderAdminLogin();
-  else appRoot.innerHTML = renderAdminShell();
+  let content = '';
+  if (state.view === 'onboarding') content = renderOnboarding();
+  else if (state.view === 'privacy') content = renderPrivacy();
+  else if (state.view === 'home') content = renderHome();
+  else if (state.view === 'admin-login') content = renderAdminLogin();
+  else content = renderAdminShell();
+
+  if (state.loading) {
+    content += `
+      <div class="global-loading-overlay" role="dialog" aria-modal="true" aria-label="Processing request">
+        <div class="global-loading-card">
+          <span class="loading-spinner spinner-accent"></span>
+          <strong>Paki-antay sandali…</strong>
+          <span>Pinoproseso ang iyong request</span>
+        </div>
+      </div>
+    `;
+  }
+
+  appRoot.innerHTML = content;
   runMotion();
 }
 
