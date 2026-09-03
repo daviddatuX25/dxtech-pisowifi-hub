@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-02
+goal: Enable admins to publish branch-specific promos and review user requests
+  without automatic redemption links.

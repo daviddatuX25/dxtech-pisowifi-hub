@@ -1,0 +1,26 @@
+{
+  "name": "announcement-room",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "latest",
+    "@types/papaparse": "^5.5.2",
+    "lucide": "^1.39.0",
+    "motion": "^13.1.1",
+    "papaparse": "^5.7.0",
+    "read-excel-file": "^9.3.10"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,7 @@
+project_id = "announcement-room"
+
+[functions.api]
+verify_jwt = false
+
+[functions.notify-worker]
+verify_jwt = false

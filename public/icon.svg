@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Announcement Room">
+  <rect width="64" height="64" fill="#101b25"/>
+  <path d="M16 44V20h8v24h-8Zm12 0V14h8v30h-8Zm12 0V8h8v36h-8Z" fill="#f06d3c"/>
+</svg>
