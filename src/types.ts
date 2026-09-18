@@ -78,6 +78,14 @@ export interface AdminSummary {
   notificationSubscribers: number;
 }
 
+export interface VoucherPoolItem {
+  branchId: string;
+  branchName: string;
+  total: number;
+  assigned: number;
+  available: number;
+}
+
 export interface AdminPromotion {
   id: string;
   name: string;
@@ -92,6 +100,7 @@ export interface AdminPromotion {
   voucherTotalCount?: number;
   voucherUnassignedCount?: number;
   voucherAssignedCount?: number;
+  voucherPools?: VoucherPoolItem[];
   slots: Array<{
     branchId: string;
     branchName: string;

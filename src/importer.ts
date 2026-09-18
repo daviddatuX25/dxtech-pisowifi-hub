@@ -201,15 +201,18 @@ export function parseRawVoucherText(
         blankCount++;
         continue;
       }
-      if (seen.has(code)) {
+      const branchRes = resolveBranchIdentifier(record.branchStr, branches, defaultBranchId);
+      if (!branchRes.branchId && (defaultBranchId || branches.length > 0)) {
+        unresolvedBranchCount++;
+      }
+
+      const branchKey = branchRes.branchId || '__unresolved__';
+      const dedupeKey = `${branchKey}:${code}`;
+      if (seen.has(dedupeKey)) {
         duplicateCount++;
         continue;
       }
-
-      const branchRes = resolveBranchIdentifier(record.branchStr, branches, defaultBranchId);
-      if (!branchRes.branchId && defaultBranchId && defaultBranchId !== 'all') {
-        unresolvedBranchCount++;
-      }
+      seen.add(dedupeKey);
 
       if (branchRes.branchId) {
         const current = branchCounts.get(branchRes.branchId) || { branchName: branchRes.branchName || 'Branch', count: 0 };
@@ -217,7 +220,6 @@ export function parseRawVoucherText(
         branchCounts.set(branchRes.branchId, current);
       }
 
-      seen.add(code);
       vouchers.push({
         code,
         durationLabel: duration,
@@ -351,26 +353,25 @@ export function applyColumnMapping(
       continue;
     }
 
-    if (seen.has(code)) {
+    const rawBranch = mapping.branchColIndex >= 0 && mapping.branchColIndex < row.length ? row[mapping.branchColIndex] : undefined;
+    const branchRes = resolveBranchIdentifier(rawBranch, branches, fallbackBranchId);
+    if (!branchRes.branchId && (fallbackBranchId || branches.length > 0)) {
+      unresolvedBranchCount++;
+    }
+
+    const branchKey = branchRes.branchId || '__unresolved__';
+    const dedupeKey = `${branchKey}:${code}`;
+    if (seen.has(dedupeKey)) {
       duplicateCount++;
       continue;
     }
-
-    seen.add(code);
-
+    seen.add(dedupeKey);
     let duration: string | undefined = undefined;
     if (mapping.timeColIndex >= 0 && mapping.timeColIndex < row.length && row[mapping.timeColIndex]) {
       duration = row[mapping.timeColIndex].trim();
     } else if (fallbackDuration) {
       duration = fallbackDuration.trim();
     }
-
-    const rawBranch = mapping.branchColIndex >= 0 && mapping.branchColIndex < row.length ? row[mapping.branchColIndex] : undefined;
-    const branchRes = resolveBranchIdentifier(rawBranch, branches, fallbackBranchId);
-    if (!branchRes.branchId && fallbackBranchId && fallbackBranchId !== 'all') {
-      unresolvedBranchCount++;
-    }
-
     if (branchRes.branchId) {
       const current = branchCounts.get(branchRes.branchId) || { branchName: branchRes.branchName || 'Branch', count: 0 };
       current.count++;

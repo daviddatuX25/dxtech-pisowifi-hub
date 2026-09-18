@@ -123,6 +123,40 @@ describe('Voucher Importer', () => {
       expect(result.vouchers[1].durationLabel).toBe('5 Hours');
       expect(result.vouchers[1].branchId).toBe('b2-uuid');
     });
+    it('allows identical voucher codes across different branches', () => {
+      const text = `
+        DX-COMMON, 1 Hour, Lisa Canteen
+        DX-COMMON, 1 Hour, Downtown Plaza
+      `;
+      const result = parseRawVoucherText(text, undefined, undefined, branches);
+      expect(result.validCount).toBe(2);
+      expect(result.duplicateCount).toBe(0);
+      expect(result.vouchers[0].code).toBe('DX-COMMON');
+      expect(result.vouchers[0].branchId).toBe('b1-uuid');
+      expect(result.vouchers[1].code).toBe('DX-COMMON');
+      expect(result.vouchers[1].branchId).toBe('b2-uuid');
+    });
+
+    it('deduplicates identical voucher codes within the same branch', () => {
+      const text = `
+        DX-COMMON, 1 Hour, Lisa Canteen
+        DX-COMMON, 2 Hours, Lisa Canteen
+      `;
+      const result = parseRawVoucherText(text, undefined, undefined, branches);
+      expect(result.validCount).toBe(1);
+      expect(result.duplicateCount).toBe(1);
+      expect(result.vouchers[0].code).toBe('DX-COMMON');
+      expect(result.vouchers[0].branchId).toBe('b1-uuid');
+    });
+
+    it('tracks unresolved branches when vouchers have no branch mapping', () => {
+      const text = 'DX-1001\nDX-1002';
+      const result = parseRawVoucherText(text, '1 Hour', undefined, branches);
+      expect(result.validCount).toBe(2);
+      expect(result.unresolvedBranchCount).toBe(2);
+      expect(result.vouchers[0].branchId).toBeUndefined();
+      expect(result.vouchers[1].branchId).toBeUndefined();
+    });
   });
 
   describe('applyColumnMapping with irregular CSB header and data start row', () => {

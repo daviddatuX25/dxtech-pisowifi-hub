@@ -138,7 +138,7 @@ export function savePromotion(adminToken: string, input: Record<string, unknown>
 export function importVouchers(
   adminToken: string,
   promotionId: string,
-  vouchers: Array<{ code: string; durationLabel?: string; branchId?: string }>
+  vouchers: Array<{ code: string; durationLabel?: string; branchId: string }>
 ): Promise<{ importedCount: number; totalBatch: number }> {
   return call({ action: 'admin_import_vouchers', promotionId, vouchers }, { adminToken, profileToken: null });
 }
@@ -149,6 +149,15 @@ export function getPromotionVouchers(
 ): Promise<{ vouchers: VoucherInventoryItem[] }> {
   return call<{ vouchers: VoucherInventoryItem[] }>({ action: 'admin_get_promotion_vouchers', promotionId }, { adminToken, profileToken: null });
 }
+export function reassignVouchersBranch(
+  adminToken: string,
+  promotionId: string,
+  branchId: string,
+  voucherIds: string[]
+): Promise<{ reassignedCount: number }> {
+  return call({ action: 'admin_reassign_vouchers_branch', promotionId, branchId, voucherIds }, { adminToken, profileToken: null });
+}
+
 
 export function reviewPromoRequests(adminToken: string, requestIds: string[], status: 'approved' | 'rejected'): Promise<{
   approved: string[];

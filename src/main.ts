@@ -12,6 +12,7 @@ import {
   reviewIssue,
   reviewPromoRequests,
   saveBranch,
+  reassignVouchersBranch,
   savePromotion,
   submitIssue,
   submitPromoRequest,
@@ -116,6 +117,7 @@ interface AppState {
   voucherModalList: VoucherInventoryItem[] | null;
   voucherModalLoading: boolean;
   voucherSearchQuery: string;
+  voucherModalBranchFilter: string;
   activeClaimedVoucher: { promoName: string; code: string; duration?: string; isDirectLink?: boolean; portalUrl?: string } | null;
   adminPrefillEmail?: string;
   adminPrefillPassword?: string;
@@ -164,11 +166,12 @@ const state: AppState = {
   importerSpreadsheet: null,
   importerMapping: { codeColIndex: 0, timeColIndex: -1, labelColIndex: -1, branchColIndex: -1 },
   importerFallbackDuration: '',
-  importerSelectedBranchId: 'all',
+  importerSelectedBranchId: '',
   voucherModalPromotionId: null,
   voucherModalList: null,
   voucherModalLoading: false,
   voucherSearchQuery: '',
+  voucherModalBranchFilter: 'all',
   activeClaimedVoucher: null,
   shareModal: null,
   isRouterConnected: false,
@@ -1342,7 +1345,7 @@ function renderSpreadsheetMapper(parsed: SpreadsheetParseResult): string {
   const branches = state.adminData?.branches || [];
   const headers = parsed.headers;
   const mapping = state.importerMapping;
-  const selectedBranch = state.importerSelectedBranchId !== 'all' ? state.importerSelectedBranchId : undefined;
+  const selectedBranch = state.importerSelectedBranchId && state.importerSelectedBranchId !== 'all' ? state.importerSelectedBranchId : undefined;
   const processed = applyColumnMapping(
     parsed,
     mapping,
@@ -1463,7 +1466,7 @@ function renderSpreadsheetMapper(parsed: SpreadsheetParseResult): string {
                 branches,
                 selectedBranch
               ).vouchers[0]?.branchName : undefined;
-              const displayBranch = resBranch || (selectedBranch ? (branches.find((b) => b.id === selectedBranch)?.name || 'Selected Branch') : 'All Branches (Global)');
+              const displayBranch = resBranch || (selectedBranch ? (branches.find((b) => b.id === selectedBranch)?.name || 'Selected Branch') : '⚠️ Missing Branch');
 
               return `
                 <tr>
@@ -1497,6 +1500,10 @@ function renderVoucherInventoryModal(): string {
   const promo = state.adminData?.promotions.find((p) => p.id === promoId);
   const vouchers = state.voucherModalList;
   const filtered = (vouchers || []).filter((v) => {
+    if (state.voucherModalBranchFilter !== 'all') {
+      if (state.voucherModalBranchFilter === 'unassigned' && v.branchId !== null) return false;
+      if (state.voucherModalBranchFilter !== 'unassigned' && v.branchId !== state.voucherModalBranchFilter) return false;
+    }
     const q = state.voucherSearchQuery.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -1506,9 +1513,13 @@ function renderVoucherInventoryModal(): string {
       v.branchName.toLowerCase().includes(q)
     );
   });
+
+  const branches = state.adminData?.branches || [];
+  const pools = promo?.voucherPools || promo?.slots || [];
+
   return `
     <div class="modal-backdrop" style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(4px); z-index: 1000; overflow-y: auto; padding: 20px; display: flex; align-items: center; justify-content: center;">
-      <section class="voucher-drawer-card" aria-labelledby="voucher-inventory-title" style="width: 100%; max-width: 860px; position: relative;">
+      <section class="voucher-drawer-card" aria-labelledby="voucher-inventory-title" style="width: 100%; max-width: 880px; position: relative;">
         <div class="admin-panel-head">
           <div class="admin-panel-title-group">
             <p class="section-code">VOUCHER INVENTORY POOL</p>
@@ -1517,8 +1528,27 @@ function renderVoucherInventoryModal(): string {
           <button class="close-btn-modern" type="button" data-action="close-voucher-drawer" aria-label="Close inventory">${icon(Icons.X, 'close-svg', 16)}</button>
         </div>
 
-        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-          <input data-filter="voucher-search" placeholder="Search by code, customer name, device ID, or branch..." value="${escapeHtml(state.voucherSearchQuery)}" class="admin-input" style="flex: 1;" />
+        ${pools.length ? `
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px;">
+            ${pools.map((p) => {
+              const avail = 'available' in p ? p.available : p.availableSlots;
+              const total = 'total' in p ? p.total : p.capacity;
+              return `
+                <span class="importer-stat-chip ${avail === 0 ? 'is-warn' : ''}">
+                  ${icon(Icons.MapPin, 'chip-icon', 11)} <b>${escapeHtml(p.branchName)}:</b> ${avail} in stock (${total} total)
+                </span>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
+
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap;">
+          <input data-filter="voucher-search" placeholder="Search by code, customer name, device ID, or branch..." value="${escapeHtml(state.voucherSearchQuery)}" class="admin-input" style="flex: 1; min-width: 220px;" />
+          <select data-filter="voucher-branch-filter" class="admin-select" style="max-width: 200px;">
+            <option value="all" ${state.voucherModalBranchFilter === 'all' ? 'selected' : ''}>All Branches</option>
+            ${branches.map((b) => `<option value="${escapeHtml(b.id)}" ${state.voucherModalBranchFilter === b.id ? 'selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
+            <option value="unassigned" ${state.voucherModalBranchFilter === 'unassigned' ? 'selected' : ''}>⚠️ Unassigned (Legacy)</option>
+          </select>
           <button class="primary-action" type="button" data-action="edit-promo" data-promotion-id="${escapeHtml(promoId)}" style="white-space: nowrap;">
             ${icon(Icons.UploadCloud, 'btn-icon-svg', 15)} <span>Import More</span>
           </button>
@@ -1548,7 +1578,21 @@ function renderVoucherInventoryModal(): string {
                       </div>
                     </td>
                     <td>${escapeHtml(v.durationLabel || 'Standard')}</td>
-                    <td>${escapeHtml(v.branchName)}</td>
+                    <td>
+                      ${v.branchId ? escapeHtml(v.branchName) : `
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                          <span class="badge-status status-rejected" style="font-size: 0.72rem;">Unassigned</span>
+                          ${!v.assignedProfileId && branches.length ? `
+                            <select data-reassign-select="${escapeHtml(v.id)}" class="admin-select" style="min-height: 26px; font-size: 0.72rem; padding: 2px 4px;">
+                              ${branches.map((b) => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`).join('')}
+                            </select>
+                            <button class="btn-copy-chip" type="button" data-action="reassign-voucher" data-voucher-id="${escapeHtml(v.id)}" data-promotion-id="${escapeHtml(promoId)}">
+                              Assign
+                            </button>
+                          ` : ''}
+                        </div>
+                      `}
+                    </td>
                     <td>
                       ${v.assignedProfileId ? `
                         <span class="badge-status status-approved" style="font-size: 0.74rem;">
@@ -1589,7 +1633,7 @@ function renderAdminPromos(data: AdminData): string {
   const parsedPaste = parseRawVoucherText(
     state.importerTextDraft,
     state.importerFallbackDuration,
-    state.importerSelectedBranchId !== 'all' ? state.importerSelectedBranchId : undefined,
+    state.importerSelectedBranchId && state.importerSelectedBranchId !== 'all' ? state.importerSelectedBranchId : undefined,
     data.branches
   );
 
@@ -1700,11 +1744,12 @@ function renderAdminPromos(data: AdminData): string {
                 `}
 
                 <div class="admin-field">
-                  <span class="admin-label">Assign Vouchers To Branch</span>
-                  <select name="importerSelectedBranchId" class="admin-select">
-                    <option value="all" ${state.importerSelectedBranchId === 'all' ? 'selected' : ''}>All Branches (Global Pool)</option>
+                  <span class="admin-label">Voucher Source Router / Branch <b>*</b></span>
+                  <select name="importerSelectedBranchId" class="admin-select" required>
+                    <option value="" disabled ${!state.importerSelectedBranchId ? 'selected' : ''}>-- Select Source Branch / Router --</option>
                     ${data.branches.map((branch) => `<option value="${escapeHtml(branch.id)}" ${state.importerSelectedBranchId === branch.id ? 'selected' : ''}>${escapeHtml(branch.name)}</option>`).join('')}
                   </select>
+                  <small class="admin-field-hint">${icon(Icons.Info, 'info-hint', 12)} Vouchers belong to this branch's router. The promotion can still be claimed by all branches that have their own vouchers imported.</small>
                 </div>
               </div>
             ` : `
@@ -1807,8 +1852,10 @@ function renderAdminPromotion(promo: AdminPromotion): string {
       <div class="admin-slots-summary">
         ${promo.slots.map((slot) => `
           <div class="admin-slot-row">
-            <span>${escapeHtml(slot.branchName)}</span>
-            <strong>${slot.availableSlots} available / ${slot.capacity} slots</strong>
+            <span>${icon(Icons.MapPin, 'branch-icon', 12)} ${escapeHtml(slot.branchName)}</span>
+            <strong style="${isVoucher && slot.availableSlots === 0 ? 'color: #f87171;' : ''}">
+              ${slot.availableSlots} available / ${slot.capacity} ${isVoucher ? 'stock' : 'slots'}
+            </strong>
           </div>
         `).join('')}
       </div>
@@ -2716,24 +2763,28 @@ function resetPromotionEditor(): void {
   state.importerSpreadsheet = null;
   state.importerMapping = { codeColIndex: 0, timeColIndex: -1, labelColIndex: -1, branchColIndex: -1 };
   state.importerFallbackDuration = '';
-  state.importerSelectedBranchId = 'all';
+  state.importerSelectedBranchId = '';
 }
 
 async function handlePromotionSave(form: HTMLFormElement): Promise<void> {
   if (!state.adminToken || !state.adminData) return;
   const fulfillmentType = state.editingFulfillmentType;
   let slots: Array<{ branchId: string; capacity: number }> = [];
-  let vouchers: Array<{ code: string; durationLabel?: string; branchId?: string }> = [];
+  let vouchers: Array<{ code: string; durationLabel?: string; branchId: string }> = [];
 
   if (fulfillmentType === 'voucher') {
     const branches = state.adminData.branches;
-    const selectedBranchId = state.importerSelectedBranchId !== 'all' ? state.importerSelectedBranchId : undefined;
+    const selectedBranchId = state.importerSelectedBranchId && state.importerSelectedBranchId !== 'all' ? state.importerSelectedBranchId : undefined;
     if (state.importerActiveTab === 'paste') {
       const parsed = parseRawVoucherText(state.importerTextDraft, state.importerFallbackDuration, selectedBranchId, branches);
-      vouchers = parsed.vouchers;
+      vouchers = parsed.vouchers as Array<{ code: string; durationLabel?: string; branchId: string }>;
     } else if (state.importerActiveTab === 'file' && state.importerSpreadsheet) {
       const parsed = applyColumnMapping(state.importerSpreadsheet, state.importerMapping, branches, selectedBranchId, state.importerFallbackDuration);
-      vouchers = parsed.vouchers;
+      vouchers = parsed.vouchers as Array<{ code: string; durationLabel?: string; branchId: string }>;
+    }
+    if (vouchers.length > 0 && vouchers.some((v) => !v.branchId)) {
+      setError('Please select a voucher source branch for imported vouchers.');
+      return;
     }
     // Voucher inventory, not manual slot quotas, controls availability.
     slots = [];
@@ -2916,6 +2967,7 @@ async function handleClick(event: MouseEvent): Promise<void> {
       state.voucherModalPromotionId = promoId;
       state.voucherModalLoading = true;
       state.voucherSearchQuery = '';
+      state.voucherModalBranchFilter = 'all';
       render();
       try {
         const res = await getPromotionVouchers(state.adminToken, promoId);
@@ -2931,6 +2983,26 @@ async function handleClick(event: MouseEvent): Promise<void> {
     state.voucherModalPromotionId = null;
     state.voucherModalList = null;
     render();
+  } else if (action === 'reassign-voucher') {
+    const promoId = target.dataset.promotionId;
+    const voucherId = target.dataset.voucherId;
+    const selectElem = document.querySelector<HTMLSelectElement>(`select[data-reassign-select="${voucherId}"]`);
+    const targetBranchId = selectElem?.value;
+    if (promoId && voucherId && targetBranchId && state.adminToken) {
+      try {
+        state.voucherModalLoading = true;
+        render();
+        await reassignVouchersBranch(state.adminToken, promoId, targetBranchId, [voucherId]);
+        const res = await getPromotionVouchers(state.adminToken, promoId);
+        state.voucherModalList = res.vouchers;
+        state.voucherModalLoading = false;
+        await loadAdminConsole();
+        setToast('Voucher assigned to branch.');
+      } catch (err) {
+        state.voucherModalLoading = false;
+        setError(err instanceof Error ? err.message : 'Failed to reassign voucher.');
+      }
+    }
   } else if (action === 'choose-issue') {
     state.issueComposer = target.dataset.issueType as IssueType;
     render();
@@ -3117,6 +3189,7 @@ async function handleFilter(event: Event): Promise<void> {
   if (filter === 'request-promo') state.requestPromotionFilter = target.value;
   if (filter === 'issue-status') state.issueStatusFilter = target.value as AppState['issueStatusFilter'];
   if (filter === 'issue-branch') state.issueBranchFilter = target.value;
+  if (filter === 'voucher-branch-filter') state.voucherModalBranchFilter = target.value;
   render();
 }
 function parseRoute(): { view: View; promoId: string | null } {

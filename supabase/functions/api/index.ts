@@ -50,7 +50,7 @@ function requiredUuid(body: JsonBody, key: string, label: string): string {
   return value;
 }
 
-type VoucherRow = { code: string; duration_label: string | null; branch_id: string | null };
+type VoucherRow = { code: string; duration_label: string | null; branch_id: string };
 
 function parseVoucherRows(value: unknown): VoucherRow[] {
   if (!Array.isArray(value) || value.length === 0) {
@@ -78,14 +78,12 @@ function parseVoucherRows(value: unknown): VoucherRow[] {
     }
 
     const branchValue = input.branchId;
-    const branchId = branchValue === undefined || branchValue === null || branchValue === ''
-      ? null
-      : typeof branchValue === 'string' && isUuid(branchValue) ? branchValue : null;
-    if (branchValue !== undefined && branchValue !== null && branchValue !== '' && !branchId) {
-      throw new HttpError(400, `Voucher row ${index + 1} has an invalid branch.`, 'VALIDATION_ERROR');
+    const branchId = typeof branchValue === 'string' && isUuid(branchValue) ? branchValue : null;
+    if (!branchId) {
+      throw new HttpError(400, `Voucher row ${index + 1} requires a valid branch ID.`, 'VALIDATION_ERROR');
     }
 
-    const key = code;
+    const key = `${branchId}:${code}`;
     if (seen.has(key)) continue;
     seen.add(key);
     rows.push({ code, duration_label: durationLabel, branch_id: branchId });
@@ -95,7 +93,7 @@ function parseVoucherRows(value: unknown): VoucherRow[] {
 }
 
 async function validateVoucherBranches(rows: VoucherRow[]): Promise<void> {
-  const branchIds = [...new Set(rows.map((row) => row.branch_id).filter((id): id is string => Boolean(id)))];
+  const branchIds = [...new Set(rows.map((row) => row.branch_id))];
   if (!branchIds.length) return;
   const { data, error } = await client.from('branches').select('id').in('id', branchIds);
   if (error || (data || []).length !== branchIds.length) throw new HttpError(400, 'Every voucher branch must be configured.', 'BRANCH_INVALID');
@@ -239,7 +237,7 @@ async function loadPublicData(request: Request) {
     client.from('promotion_slots').select('promotion_id,branch_id,capacity,approved_count').eq('branch_id', context.branchId),
     client.from('promo_requests').select('id,promotion_id,branch_id,status,voucher_code,created_at,reviewed_at,promotions(name),branches(name)').eq('profile_id', context.id).order('created_at', { ascending: false }),
     client.from('issues').select('id,issue_type,unit,amount_inserted,amount_credited,points_lost,description,status,created_at,reviewed_at,branches(name)').eq('profile_id', context.id).order('created_at', { ascending: false }),
-    client.from('promotion_vouchers').select('promotion_id,branch_id').is('assigned_profile_id', null),
+    client.from('promotion_vouchers').select('promotion_id').eq('branch_id', context.branchId).is('assigned_profile_id', null),
     getProfileState(context),
   ]);
   if (promotionsError || slotsError || requestsError || issuesError || vouchersError) {
@@ -252,9 +250,7 @@ async function loadPublicData(request: Request) {
 
   const unassignedCounts = new Map<string, number>();
   for (const voucher of unassignedVouchers || []) {
-    if (!voucher.branch_id || voucher.branch_id === context.branchId) {
-      unassignedCounts.set(voucher.promotion_id, (unassignedCounts.get(voucher.promotion_id) || 0) + 1);
-    }
+    unassignedCounts.set(voucher.promotion_id, (unassignedCounts.get(voucher.promotion_id) || 0) + 1);
   }
 
   const publicPromotions = (promotions || []).flatMap((promotion) => {
@@ -486,7 +482,7 @@ async function adminLoadData() {
     client.from('promotions').select('id', { count: 'exact', head: true }).eq('active', true).eq('published', true),
     client.from('push_subscriptions').select('id', { count: 'exact', head: true }).eq('active', true),
     client.from('audit_logs').select('id,action,target_type,target_id,outcome,created_at').order('created_at', { ascending: false }).limit(12),
-    client.from('promotion_vouchers').select('promotion_id,assigned_profile_id'),
+    client.from('promotion_vouchers').select('promotion_id,branch_id,assigned_profile_id'),
   ]);
   const firstError = branchesResult.error || promotionsResult.error || slotsResult.error || requestsResult.error || issuesResult.error || pendingRequestsResult.error || pendingIssuesResult.error || activePromotionsResult.error || subscribersResult.error || auditLogsResult.error || vouchersResult.error;
   if (firstError) throw new Error(firstError.message);
@@ -501,17 +497,61 @@ async function adminLoadData() {
   }
 
   const voucherStatsByPromo = new Map<string, { total: number; unassigned: number; assigned: number }>();
+  const voucherStatsByPromoBranch = new Map<string, { total: number; unassigned: number; assigned: number }>();
   for (const v of vouchersResult.data || []) {
     const curr = voucherStatsByPromo.get(v.promotion_id) || { total: 0, unassigned: 0, assigned: 0 };
     curr.total += 1;
     if (v.assigned_profile_id) curr.assigned += 1;
     else curr.unassigned += 1;
     voucherStatsByPromo.set(v.promotion_id, curr);
+
+    if (v.branch_id) {
+      const bKey = `${v.promotion_id}:${v.branch_id}`;
+      const bCurr = voucherStatsByPromoBranch.get(bKey) || { total: 0, unassigned: 0, assigned: 0 };
+      bCurr.total += 1;
+      if (v.assigned_profile_id) bCurr.assigned += 1;
+      else bCurr.unassigned += 1;
+      voucherStatsByPromoBranch.set(bKey, bCurr);
+    }
   }
 
   const promotions = (promotionsResult.data || []).map((promotion) => {
     const vStats = voucherStatsByPromo.get(promotion.id) || { total: 0, unassigned: 0, assigned: 0 };
     const isVoucher = promotion.fulfillment_type === 'voucher';
+    const voucherPools = branches.map((branch) => {
+      const bStats = voucherStatsByPromoBranch.get(`${promotion.id}:${branch.id}`) || { total: 0, unassigned: 0, assigned: 0 };
+      return {
+        branchId: branch.id,
+        branchName: branch.name,
+        total: bStats.total,
+        assigned: bStats.assigned,
+        available: bStats.unassigned,
+      };
+    });
+
+    const slots = isVoucher
+      ? branches.map((branch) => {
+          const bStats = voucherStatsByPromoBranch.get(`${promotion.id}:${branch.id}`) || { total: 0, unassigned: 0, assigned: 0 };
+          return {
+            branchId: branch.id,
+            branchName: branch.name,
+            capacity: bStats.total,
+            approvedCount: bStats.assigned,
+            availableSlots: bStats.unassigned,
+          };
+        })
+      : (slotsByPromotion.get(promotion.id) || []).map((slot) => {
+          const capacity = Number(slot.capacity);
+          const approvedCount = Number(slot.approved_count);
+          return {
+            branchId: slot.branch_id,
+            branchName: relation(slot.branches)?.name || branchById.get(slot.branch_id)?.name || 'Unknown branch',
+            capacity,
+            approvedCount,
+            availableSlots: Math.max(0, capacity - approvedCount),
+          };
+        });
+
     return {
       id: promotion.id,
       name: promotion.name,
@@ -526,17 +566,8 @@ async function adminLoadData() {
       voucherTotalCount: vStats.total,
       voucherUnassignedCount: vStats.unassigned,
       voucherAssignedCount: vStats.assigned,
-      slots: (slotsByPromotion.get(promotion.id) || []).map((slot) => {
-        const capacity = Number(slot.capacity);
-        const approvedCount = Number(slot.approved_count);
-        return {
-          branchId: slot.branch_id,
-          branchName: relation(slot.branches)?.name || branchById.get(slot.branch_id)?.name || 'Unknown branch',
-          capacity: isVoucher ? Math.max(capacity, vStats.total) : capacity,
-          approvedCount,
-          availableSlots: isVoucher ? vStats.unassigned : Math.max(0, capacity - approvedCount),
-        };
-      }),
+      voucherPools: isVoucher ? voucherPools : undefined,
+      slots,
     };
   });
 
@@ -707,7 +738,7 @@ async function adminSavePromotion(adminUserId: string, body: JsonBody) {
     await validateVoucherBranches(rows);
     const { error: voucherError } = await client.from('promotion_vouchers').upsert(
       rows.map((row) => ({ ...row, promotion_id: promotionId })),
-      { onConflict: 'promotion_id,code', ignoreDuplicates: true },
+      { onConflict: 'promotion_id,branch_id,code', ignoreDuplicates: true },
     );
     if (voucherError) throw new Error(voucherError.message);
   }
@@ -730,7 +761,7 @@ async function adminImportVouchers(adminUserId: string, body: JsonBody) {
   await validateVoucherBranches(rows);
   const { data, error } = await client.from('promotion_vouchers').upsert(
     rows.map((row) => ({ ...row, promotion_id: promotionId })),
-    { onConflict: 'promotion_id,code', ignoreDuplicates: true },
+    { onConflict: 'promotion_id,branch_id,code', ignoreDuplicates: true },
   ).select('id');
   if (error) throw new Error(error.message);
 
@@ -755,7 +786,7 @@ async function adminGetPromotionVouchers(body: JsonBody) {
       code: item.code,
       durationLabel: item.duration_label,
       branchId: item.branch_id,
-      branchName: relation(item.branches)?.name || 'All Branches',
+      branchName: relation(item.branches)?.name || (item.branch_id ? 'Unknown branch' : 'Unassigned (Legacy)'),
       assignedProfileId: item.assigned_profile_id,
       assignedDevice: relation(item.profiles)?.device_id || null,
       assignedName: relation(item.profiles)?.name || null,
@@ -805,6 +836,30 @@ async function adminDocumentUrl(adminUserId: string, body: JsonBody) {
   await audit(adminUserId, 'view_student_document', 'student_document', documentId);
   return { url: signed.signedUrl };
 }
+async function adminReassignVouchersBranch(adminUserId: string, body: JsonBody) {
+  const promotionId = requiredUuid(body, 'promotionId', 'Promotion');
+  const targetBranchId = requiredUuid(body, 'branchId', 'Target branch');
+  const voucherIds = Array.isArray(body.voucherIds) ? body.voucherIds.filter((id): id is string => typeof id === 'string' && isUuid(id)) : [];
+  if (!voucherIds.length) throw new HttpError(400, 'Select at least one voucher to reassign.', 'VALIDATION_ERROR');
+
+  const { data: branch, error: branchError } = await client.from('branches').select('id,name').eq('id', targetBranchId).maybeSingle();
+  if (branchError || !branch) throw new HttpError(400, 'Target branch is invalid.', 'BRANCH_INVALID');
+
+  const { data, error } = await client
+    .from('promotion_vouchers')
+    .update({ branch_id: targetBranchId })
+    .eq('promotion_id', promotionId)
+    .in('id', voucherIds)
+    .is('assigned_profile_id', null)
+    .is('branch_id', null)
+    .select('id');
+
+  if (error) throw new Error(error.message);
+  const reassignedCount = data?.length || 0;
+  await audit(adminUserId, 'reassign_vouchers_branch', 'promotion', promotionId, { reassignedCount, targetBranchId });
+  return { reassignedCount };
+}
+
 
 async function handlePost(request: Request, body: JsonBody): Promise<unknown> {
   const action = body.action;
@@ -824,6 +879,7 @@ async function handlePost(request: Request, body: JsonBody): Promise<unknown> {
     case 'admin_review_promos': { const adminUserId = await requireAdmin(request, client); return adminReviewPromos(adminUserId, body); }
     case 'admin_review_issue': { const adminUserId = await requireAdmin(request, client); return adminReviewIssue(adminUserId, body); }
     case 'admin_document_url': { const adminUserId = await requireAdmin(request, client); return adminDocumentUrl(adminUserId, body); }
+    case 'admin_reassign_vouchers_branch': { const adminUserId = await requireAdmin(request, client); return adminReassignVouchersBranch(adminUserId, body); }
     default: throw new HttpError(404, 'Unknown API action.', 'ACTION_NOT_FOUND');
   }
 }
