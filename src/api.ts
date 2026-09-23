@@ -68,6 +68,7 @@ async function call<T>(payload: Record<string, unknown>, options: CallOptions = 
 export function createProfile(input: {
   deviceId: string;
   name: string;
+  email?: string | null;
   branchId: string;
   privacyConsent: boolean;
 }): Promise<{ profile: Profile; profileToken: string }> {
@@ -77,6 +78,7 @@ export function createProfile(input: {
 export function updateProfile(input: {
   deviceId: string;
   name: string;
+  email?: string | null;
 }, profileToken: string): Promise<{ profile: Profile }> {
   return call({ action: 'update_profile', ...input }, { profileToken });
 }

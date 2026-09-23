@@ -1375,6 +1375,21 @@ code {
   text-decoration: underline;
 }
 
+.rail-email {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.rail-email em {
+  color: #64748b;
+  font-style: italic;
+}
+
 .rail-bottom-actions {
   margin-top: auto;
   padding-top: 24px;

@@ -17,19 +17,36 @@ export function validateDeviceId(value: string): string | null {
   }
   return null;
 }
+export function validateEmail(value?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 255) return 'Max 255 characters ang email.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    return 'Maglagay ng tamang email format (hal. juan@gmail.com).';
+  }
+  return null;
+}
 
-function validateProfileDetails(input: { deviceId: string; name: string }): ValidationErrors {
+function validateProfileDetails(input: {
+  deviceId: string;
+  name: string;
+  email?: string | null;
+}): ValidationErrors {
   const errors: ValidationErrors = {};
   const deviceError = validateDeviceId(input.deviceId);
   if (deviceError) errors.deviceId = deviceError;
   if (!input.name.trim()) errors.name = 'Ilagay ang pangalan.';
   else if (input.name.trim().length > 120) errors.name = 'Max 120 characters ang pangalan.';
+  const emailError = validateEmail(input.email);
+  if (emailError) errors.email = emailError;
   return errors;
 }
 
 export function validateProfile(input: {
   deviceId: string;
   name: string;
+  email?: string | null;
   branchId: string;
   privacyConsent: boolean;
 }): ValidationErrors {
@@ -39,7 +56,11 @@ export function validateProfile(input: {
   return errors;
 }
 
-export function validateProfileEdit(input: { deviceId: string; name: string }): ValidationErrors {
+export function validateProfileEdit(input: {
+  deviceId: string;
+  name: string;
+  email?: string | null;
+}): ValidationErrors {
   return validateProfileDetails(input);
 }
 

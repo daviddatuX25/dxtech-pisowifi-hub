@@ -15,6 +15,7 @@ export interface Profile {
   id: string;
   deviceId: string;
   name: string;
+  email: string | null;
   branchId: string;
   branchName: string;
   hasStudentDocument: boolean;

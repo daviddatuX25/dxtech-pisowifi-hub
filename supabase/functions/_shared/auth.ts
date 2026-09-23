@@ -5,6 +5,7 @@ export interface ProfileContext {
   id: string;
   deviceId: string;
   name: string;
+  email: string | null;
   branchId: string;
   branchName: string;
 }
@@ -43,7 +44,7 @@ export async function requireProfile(request: Request, client: SupabaseClient): 
 
   const { data: profile, error: profileError } = await client
     .from('profiles')
-    .select('id, device_id, name, branch_id, branches(name)')
+    .select('id, device_id, name, email, branch_id, branches(name)')
     .eq('id', session.profile_id)
     .maybeSingle();
   if (profileError || !profile) throw new HttpError(401, 'Your profile could not be found.', 'PROFILE_NOT_FOUND');
@@ -54,6 +55,7 @@ export async function requireProfile(request: Request, client: SupabaseClient): 
     id: profile.id,
     deviceId: profile.device_id,
     name: profile.name,
+    email: profile.email || null,
     branchId: profile.branch_id,
     branchName: branch?.name || 'Unknown branch',
   };

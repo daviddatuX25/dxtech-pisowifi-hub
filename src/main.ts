@@ -41,7 +41,7 @@ import {
 import { enableNotifications, getNotificationAvailability, requestNotificationPermission } from './notifications';
 import { toast } from './toast';
 import { generateQrSvg } from './qr';
-import { checkRouterReachability } from './network';
+import { checkRouterReachability, networkMonitor } from './network';
 import type {
   AdminData,
   AdminIssue,
@@ -429,6 +429,11 @@ function renderOnboardingForm(): string {
               </label>
 
               <label class="field">
+                <span class="field-label">${icon(Icons.Mail, 'field-icon-svg', 16)} Email Address <em>(Optional)</em></span>
+                <input name="email" type="email" autocomplete="email" maxlength="255" placeholder="juan@gmail.com" class="input-modern" />
+                <small class="field-hint">Para sa email alerts kapag may bagong promo o na-approve ang iyong request.</small>
+              </label>
+              <label class="field">
                 <span class="field-label">${icon(Icons.MapPin, 'field-icon-svg', 16)} Piliin ang Branch <b>*</b></span>
                 <div class="select-wrapper">
                   <select name="branchId" required ${state.branches.length ? '' : 'disabled'} class="input-modern select-modern">${branchOptions}</select>
@@ -524,6 +529,10 @@ function renderProfileRail(): string {
           <span class="data-label">BROWSER ALERTS</span>
           <span>${notificationAction}</span>
         </div>
+        <div class="data-row">
+          <span class="data-label">EMAIL ALERTS</span>
+          <span class="rail-email">${profile.email ? escapeHtml(profile.email) : '<em>Wala pa</em>'}</span>
+        </div>
       </div>
       
       <div class="rail-bottom-actions">
@@ -559,6 +568,12 @@ function renderProfileEditor(): string {
           <label class="field">
             <span class="field-label">${icon(Icons.User, 'field-icon-svg', 16)} Buong Pangalan <b>*</b></span>
             <input name="name" autocomplete="name" maxlength="120" value="${escapeHtml(profile.name)}" required class="input-modern" ${disabled} />
+          </label>
+
+          <label class="field field-wide">
+            <span class="field-label">${icon(Icons.Mail, 'field-icon-svg', 16)} Email Address <em>(Optional)</em></span>
+            <input name="email" type="email" autocomplete="email" maxlength="255" value="${escapeHtml(profile.email || '')}" placeholder="juan@gmail.com" class="input-modern" ${disabled} />
+            <small class="field-hint">Dito ipapadala ang status updates sa requests at bagong promos.</small>
           </label>
         </div>
 
@@ -2479,9 +2494,11 @@ async function submitOnboarding(form: HTMLFormElement): Promise<void> {
   const documentInput = form.querySelector<HTMLInputElement>('input[name="studentDocument"]');
   const documentFile = documentInput?.files?.[0] || null;
   const deviceId = normalizeDeviceId(formString(form, 'deviceId').trim());
+  const emailRaw = formString(form, 'email').trim();
   const input = {
     deviceId,
     name: formString(form, 'name').trim(),
+    email: emailRaw || null,
     branchId: formString(form, 'branchId'),
     privacyConsent: form.querySelector<HTMLInputElement>('input[name="privacyConsent"]')?.checked === true,
   };
@@ -2542,9 +2559,11 @@ async function submitOnboarding(form: HTMLFormElement): Promise<void> {
 async function submitProfileEdit(form: HTMLFormElement): Promise<void> {
   const token = getProfileToken();
   if (!token || !state.profile) return;
+  const emailRaw = formString(form, 'email').trim();
   const input = {
     deviceId: normalizeDeviceId(formString(form, 'deviceId').trim()),
     name: formString(form, 'name').trim(),
+    email: emailRaw || null,
   };
   const validationError = firstError(validateProfileEdit(input));
   if (validationError) {
@@ -2924,7 +2943,7 @@ async function handleClick(event: MouseEvent): Promise<void> {
   } else if (action === 'recheck-router') {
     state.routerChecking = true;
     render();
-    state.isRouterConnected = await checkRouterReachability();
+    state.isRouterConnected = await networkMonitor.forceCheck();
     state.routerChecking = false;
     render();
     if (state.isRouterConnected) {
@@ -3280,10 +3299,13 @@ appRoot.addEventListener('submit', (event) => {
   else if (form.id === 'bulk-review-form') void handleBulkReview(form, (event as SubmitEvent).submitter);
 });
 
-// Client-side background ping for 10.0.0.1 PisoWiFi connectivity
-void checkRouterReachability().then((reachable) => {
-  state.isRouterConnected = reachable;
-  render();
+// Client-side recursive background monitor for 10.0.0.1 PisoWiFi connectivity
+networkMonitor.subscribe((reachable) => {
+  if (state.isRouterConnected !== reachable) {
+    state.isRouterConnected = reachable;
+    render();
+  }
 });
+networkMonitor.start();
 
 bootRoute();

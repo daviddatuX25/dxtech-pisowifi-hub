@@ -8,6 +8,19 @@ import {
   requireProfile,
 } from '../_shared/auth.ts';
 import type { ProfileContext } from '../_shared/auth.ts';
+import {
+  getEmailService,
+  renderAdminNewPromoRequestEmail,
+  renderUserIssueReviewedEmail,
+  renderUserNewPromoPublishedEmail,
+  renderUserPromoReviewedEmail,
+} from '../_shared/email.ts';
+
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+};
 
 const client = getServiceClient();
 const MAX_JSON_BYTES = 100_000;
@@ -42,6 +55,17 @@ function optionalString(body: JsonBody, key: string, maxLength: number): string 
     throw new HttpError(400, 'One of the text fields is invalid.', 'VALIDATION_ERROR');
   }
   return value.trim();
+}
+function optionalEmail(body: JsonBody, key: string): string | null {
+  const value = body[key];
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new HttpError(400, 'Enter a valid email address.', 'VALIDATION_ERROR');
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    throw new HttpError(400, 'Enter a valid email address.', 'VALIDATION_ERROR');
+  }
+  return trimmed.toLowerCase();
 }
 
 function requiredUuid(body: JsonBody, key: string, label: string): string {
@@ -136,8 +160,8 @@ function profileView(context: ProfileContext, hasStudentDocument: boolean, notif
     id: context.id,
     deviceId: context.deviceId,
     name: context.name,
+    email: context.email || null,
     branchId: context.branchId,
-    branchName: context.branchName,
     hasStudentDocument,
     notificationsEnabled,
   };
@@ -163,6 +187,7 @@ async function createProfile(request: Request, body: JsonBody) {
   const deviceId = requiredString(body, 'deviceId', 'Device ID', 64).toUpperCase();
   if (!/^[A-Z0-9]{1,64}$/.test(deviceId)) throw new HttpError(400, 'Device ID must use letters and numbers only.', 'VALIDATION_ERROR');
   const name = requiredString(body, 'name', 'Name', 120);
+  const email = optionalEmail(body, 'email');
   const branchId = requiredUuid(body, 'branchId', 'Branch');
   if (body.privacyConsent !== true) throw new HttpError(400, 'Privacy consent is required.', 'CONSENT_REQUIRED');
 
@@ -177,6 +202,7 @@ async function createProfile(request: Request, body: JsonBody) {
     device_id: deviceId,
     id_value: deviceId,
     name,
+    email,
     branch_id: branchId,
     privacy_consent_at: new Date().toISOString(),
   }).select('id').single();
@@ -195,7 +221,7 @@ async function createProfile(request: Request, body: JsonBody) {
   }
 
   return {
-    profile: profileView({ id: profile.id, deviceId, name, branchId, branchName: branch.name }, false, false),
+    profile: profileView({ id: profile.id, deviceId, name, email, branchId, branchName: branch.name }, false, false),
     profileToken,
   };
 }
@@ -206,11 +232,13 @@ async function updateProfile(request: Request, body: JsonBody) {
   const deviceId = requiredString(body, 'deviceId', 'Device ID', 64).toUpperCase();
   if (!/^[A-Z0-9]{1,64}$/.test(deviceId)) throw new HttpError(400, 'Device ID must use letters and numbers only.', 'VALIDATION_ERROR');
   const name = requiredString(body, 'name', 'Name', 120);
+  const email = optionalEmail(body, 'email');
 
   const { data: profile, error: profileError } = await client.from('profiles').update({
     device_id: deviceId,
     id_value: deviceId,
     name,
+    email,
     updated_at: new Date().toISOString(),
   }).eq('id', context.id).select('id').maybeSingle();
   if (profileError) {
@@ -219,7 +247,7 @@ async function updateProfile(request: Request, body: JsonBody) {
   }
   if (!profile) throw new HttpError(404, 'Your profile could not be found.', 'PROFILE_NOT_FOUND');
 
-  return { profile: await getProfileState({ ...context, deviceId, name }) };
+  return { profile: await getProfileState({ ...context, deviceId, name, email }) };
 }
 
 async function loadPublicData(request: Request) {
@@ -408,6 +436,25 @@ async function submitPromoRequest(request: Request, body: JsonBody) {
     if (error.code === '23505') throw new HttpError(409, 'You already have a request for this promo.', 'DUPLICATE_REQUEST');
     throw new Error(error.message);
   }
+  // Non-voucher promo claim: notify administrator via email
+  const adminEmail = Deno.env.get('ADMIN_NOTIFICATION_EMAIL')?.trim();
+  if (adminEmail) {
+    try {
+      const emailPayload = renderAdminNewPromoRequestEmail({
+        promoName: promotion.name,
+        branchName: context.branchName,
+        userName: context.name,
+        deviceId: context.deviceId,
+        requestId: created.id,
+      });
+      emailPayload.to = adminEmail;
+      const emailService = getEmailService();
+      await emailService.send(emailPayload);
+    } catch (emailErr) {
+      console.error('Failed to dispatch admin notification email:', emailErr);
+    }
+  }
+
   return { requestId: created.id, status: created.status };
 }
 
@@ -746,6 +793,42 @@ async function adminSavePromotion(adminUserId: string, body: JsonBody) {
   await audit(adminUserId, id ? 'update_promotion' : 'create_promotion', 'promotion', promotionId, { published, audience, fulfillmentType });
   if (published && !previous?.published && notifyOnPublish) {
     await client.from('notification_jobs').insert({ event_type: 'new_promotion', payload: { title: 'New promo available', body: `${name} is now available in the room.`, path: '/' }, dedupe_key: `promotion:${promotionId}:${publishedAt}` }).select('id').maybeSingle();
+
+    try {
+      const { data: promoSlots } = await client
+        .from('promotion_slots')
+        .select('branch_id, branches(name)')
+        .eq('promotion_id', promotionId);
+
+      const branchIds = (promoSlots || []).map((s) => s.branch_id);
+      if (branchIds.length > 0) {
+        const { data: branchProfiles } = await client
+          .from('profiles')
+          .select('name, email, branch_id')
+          .in('branch_id', branchIds)
+          .not('email', 'is', null);
+
+        if (branchProfiles && branchProfiles.length > 0) {
+          const emailService = getEmailService();
+          for (const p of branchProfiles) {
+            if (!p.email) continue;
+            const slot = promoSlots?.find((s) => s.branch_id === p.branch_id);
+            const branch = relation(slot?.branches);
+            const branchName = typeof branch?.name === 'string' ? branch.name : 'Branch';
+            const emailPayload = renderUserNewPromoPublishedEmail({
+              userName: p.name,
+              promoName: name,
+              branchName,
+              description,
+            });
+            emailPayload.to = p.email;
+            await emailService.send(emailPayload);
+          }
+        }
+      }
+    } catch (emailErr) {
+      console.error('Failed to send new promo emails to users:', emailErr);
+    }
   }
   return { promotionId };
 }
@@ -809,6 +892,43 @@ async function adminReviewPromos(adminUserId: string, body: JsonBody) {
     else if (item.outcome === 'rejected') result.rejected.push(item.request_id);
     else result.skipped.push({ id: item.request_id, reason: item.reason || 'not_processed' });
   }
+
+  // Send status update emails to requesters with email addresses
+  const reviewedIds = [...result.approved, ...result.rejected];
+  if (reviewedIds.length > 0) {
+    try {
+      const { data: requestRecords } = await client
+        .from('promo_requests')
+        .select('id, status, promotions(name), branches(name), profiles(name, email)')
+        .in('id', reviewedIds);
+
+      const emailService = getEmailService();
+      for (const req of requestRecords || []) {
+        const profile = relation(req.profiles);
+        const promo = relation(req.promotions);
+        const branch = relation(req.branches);
+        const userEmail = typeof profile?.email === 'string' ? profile.email : null;
+        const userName = typeof profile?.name === 'string' ? profile.name : 'Customer';
+        const promoName = typeof promo?.name === 'string' ? promo.name : 'Promo';
+        const branchName = typeof branch?.name === 'string' ? branch.name : 'Branch';
+        const reviewStatus = req.status === 'approved' || req.status === 'rejected' ? req.status : null;
+
+        if (userEmail && reviewStatus) {
+          const emailPayload = renderUserPromoReviewedEmail({
+            userName,
+            promoName,
+            status: reviewStatus,
+            branchName,
+          });
+          emailPayload.to = userEmail;
+          await emailService.send(emailPayload);
+        }
+      }
+    } catch (emailErr) {
+      console.error('Failed to send promo review update emails:', emailErr);
+    }
+  }
+
   return result;
 }
 
@@ -824,6 +944,31 @@ async function adminReviewIssue(adminUserId: string, body: JsonBody) {
   if (!updatedIssue) throw new HttpError(409, 'This issue has already been reviewed.', 'ISSUE_ALREADY_REVIEWED');
   await audit(adminUserId, `${status}_issue`, 'issue', issueId, { issueType: issue.issue_type });
   await client.from('notification_jobs').insert({ event_type: 'issue_reviewed', target_profile_id: issue.profile_id, payload: { title: 'Issue update', body: status === 'approved' ? 'Your issue report was approved.' : 'Your issue report was not approved.', path: '/' }, dedupe_key: `issue:${issueId}:${status}` }).select('id').maybeSingle();
+
+  // Send issue status update email to user if email is configured
+  try {
+    const { data: issueProfile } = await client
+      .from('profiles')
+      .select('name, email')
+      .eq('id', issue.profile_id)
+      .maybeSingle();
+
+    if (issueProfile?.email) {
+      const { data: branch } = await client.from('branches').select('name').eq('id', issue.branch_id).maybeSingle();
+      const emailService = getEmailService();
+      const emailPayload = renderUserIssueReviewedEmail({
+        userName: issueProfile.name,
+        issueType: issue.issue_type,
+        status: status as 'approved' | 'rejected',
+        branchName: branch?.name || 'Branch',
+      });
+      emailPayload.to = issueProfile.email;
+      await emailService.send(emailPayload);
+    }
+  } catch (emailErr) {
+    console.error('Failed to send issue review update email:', emailErr);
+  }
+
   return { issueId, status };
 }
 

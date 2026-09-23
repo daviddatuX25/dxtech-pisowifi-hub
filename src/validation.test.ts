@@ -3,6 +3,7 @@ import {
   MAX_DOCUMENT_BYTES,
   normalizeDeviceId,
   validateDocument,
+  validateEmail,
   validateGhostCredit,
   validateLostPoints,
   validateProfile,
@@ -23,6 +24,17 @@ describe('profile validation', () => {
   it('validates editable profile details without onboarding-only fields', () => {
     expect(validateProfileEdit({ deviceId: 'AB123', name: 'Mina' })).toEqual({});
     expect(validateProfileEdit({ deviceId: '', name: '' })).toEqual(expect.objectContaining({ deviceId: expect.any(String), name: expect.any(String) }));
+  });
+
+  it('validates optional email format', () => {
+    expect(validateEmail(undefined)).toBeNull();
+    expect(validateEmail('')).toBeNull();
+    expect(validateEmail('   ')).toBeNull();
+    expect(validateEmail('valid.user@dxtech.ph')).toBeNull();
+    expect(validateEmail('invalid-email')).toMatch(/tamang email format/);
+    expect(validateEmail('user@')).toMatch(/tamang email format/);
+    expect(validateProfile({ deviceId: 'AB12', name: 'Juan', email: 'notanemail', branchId: 'b1', privacyConsent: true }).email).toMatch(/tamang email format/);
+    expect(validateProfileEdit({ deviceId: 'AB12', name: 'Juan', email: 'good@test.com' })).toEqual({});
   });
 });
 
