@@ -4004,8 +4004,35 @@ code {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   padding-top: 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.admin-promo-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.admin-promo-actions .btn-edit-promo {
+  min-height: 44px;
+}
+
+
+
+.btn-edit-promo.btn-delete-promo {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.btn-edit-promo.btn-delete-promo:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #ef4444;
+  color: #ffffff;
 }
 
 .btn-edit-promo {
@@ -4430,7 +4457,7 @@ code {
   }
 
 .admin-layout {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .admin-rail {

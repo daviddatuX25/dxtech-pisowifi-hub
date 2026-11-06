@@ -137,6 +137,10 @@ export function savePromotion(adminToken: string, input: Record<string, unknown>
   return call({ action: 'admin_save_promotion', ...input }, { adminToken, profileToken: null });
 }
 
+export function deletePromotion(adminToken: string, promotionId: string): Promise<{ promotionId: string }> {
+  return call({ action: 'admin_delete_promotion', promotionId }, { adminToken, profileToken: null });
+}
+
 export function importVouchers(
   adminToken: string,
   promotionId: string,

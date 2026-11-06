@@ -4,6 +4,7 @@ import { icon, Icons } from './icons';
 import {
   ApiError,
   createProfile,
+  deletePromotion,
   getPromotionVouchers,
   getStudentDocumentUrl,
   loadAdminData,
@@ -118,6 +119,7 @@ interface AppState {
   voucherModalLoading: boolean;
   voucherSearchQuery: string;
   voucherModalBranchFilter: string;
+  deletingPromotionId: string | null;
   activeClaimedVoucher: { promoName: string; code: string; duration?: string; isDirectLink?: boolean; portalUrl?: string } | null;
   adminPrefillEmail?: string;
   adminPrefillPassword?: string;
@@ -173,6 +175,7 @@ const state: AppState = {
   voucherSearchQuery: '',
   voucherModalBranchFilter: 'all',
   activeClaimedVoucher: null,
+  deletingPromotionId: null,
   shareModal: null,
   isRouterConnected: false,
   routerChecking: false,
@@ -1668,7 +1671,7 @@ function renderAdminPromos(data: AdminData): string {
   return `
     <section class="admin-content">
       <div class="admin-two-column">
-        <form class="admin-panel promo-editor" id="admin-promo-form">
+        <form class="admin-panel promo-editor" id="admin-promo-form" data-promotion-id="${escapeHtml(editing?.id || '')}">
           <div class="admin-panel-head">
             <div class="admin-panel-title-group">
               <p class="section-code">${editing ? 'EDIT PROMO' : 'NEW PROMOTION'}</p>
@@ -1880,7 +1883,7 @@ function renderAdminPromotion(promo: AdminPromotion): string {
             ? `${promo.voucherUnassignedCount ?? available} in stock / ${promo.voucherTotalCount ?? totalCapacity} total vouchers`
             : `${available} total open / ${totalCapacity} capacity`}
         </span>
-        <div style="display: flex; gap: 8px; align-items: center;">
+        <div class="admin-promo-actions">
           <button class="btn-edit-promo" type="button" data-action="share-promo" data-promotion-id="${escapeHtml(promo.id)}">
             ${icon(Icons.Share2, 'btn-icon-svg', 13)} <span>Share / QR</span>
           </button>
@@ -1891,6 +1894,9 @@ function renderAdminPromotion(promo: AdminPromotion): string {
           ` : ''}
           <button class="btn-edit-promo" type="button" data-action="edit-promo" data-promotion-id="${escapeHtml(promo.id)}">
             ${icon(Icons.Pencil, 'btn-icon-svg', 13)} <span>Edit</span>
+          </button>
+          <button class="btn-edit-promo btn-delete-promo" type="button" data-action="delete-promo" data-promotion-id="${escapeHtml(promo.id)}" ${state.deletingPromotionId ? 'disabled' : ''}>
+            ${icon(Icons.Trash2, 'btn-icon-svg', 13)} <span>${state.deletingPromotionId === promo.id ? 'Deleting…' : 'Delete'}</span>
           </button>
         </div>
       </div>
@@ -2774,6 +2780,74 @@ async function handleBranchSave(form: HTMLFormElement): Promise<void> {
   }
 }
 
+async function handlePromotionDelete(promotionId: string): Promise<void> {
+  if (!state.adminToken || state.deletingPromotionId) return;
+  const promo = state.adminData?.promotions.find((item) => item.id === promotionId);
+  if (!promo) return;
+  const confirmed = window.confirm(
+    `Permanently delete "${promo.name}"? Any unused vouchers and capacities will be permanently removed. This cannot be undone.`,
+  );
+  if (!confirmed) return;
+
+  const renderDeletionState = (): void => {
+    // Keep unsaved inputs when deleting a different promotion.
+    const editor = appRoot.querySelector<HTMLFormElement>('#admin-promo-form');
+    const preserveEditor = editor?.dataset.promotionId === (state.editingPromotionId || '');
+    render();
+    if (editor && preserveEditor) appRoot.querySelector('#admin-promo-form')?.replaceWith(editor);
+  };
+
+  state.deletingPromotionId = promotionId;
+  state.error = '';
+  state.toast = '';
+  renderDeletionState();
+  try {
+    await deletePromotion(state.adminToken, promotionId);
+
+    if (state.editingPromotionId === promotionId) resetPromotionEditor();
+    if (state.requestPromotionFilter === promotionId) state.requestPromotionFilter = 'all';
+    if (state.voucherModalPromotionId === promotionId) {
+      state.voucherModalPromotionId = null;
+      state.voucherModalList = null;
+      state.voucherModalLoading = false;
+    }
+    if (state.shareModal?.url.endsWith(`#/promo/${promotionId}`)) state.shareModal = null;
+    if (state.activePromoRequest === promotionId) state.activePromoRequest = null;
+    if (state.targetPromoId === promotionId) state.targetPromoId = null;
+    if (state.publicData) {
+      state.publicData = {
+        ...state.publicData,
+        promotions: state.publicData.promotions.filter((item) => item.id !== promotionId),
+      };
+    }
+
+    let refreshFailed = false;
+    try {
+      state.adminData = await loadAdminData(state.adminToken);
+    } catch {
+      refreshFailed = true;
+      if (state.adminData) {
+        state.adminData = {
+          ...state.adminData,
+          promotions: state.adminData.promotions.filter((item) => item.id !== promotionId),
+          summary: {
+            ...state.adminData.summary,
+            activePromotions: Math.max(0, state.adminData.summary.activePromotions - Number(promo.active && promo.published)),
+          },
+        };
+      }
+    }
+    state.toast = refreshFailed
+      ? `Deleted "${promo.name}". The admin list could not refresh; reload to update the summary.`
+      : `Deleted "${promo.name}".`;
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : 'Could not delete promotion.';
+  } finally {
+    state.deletingPromotionId = null;
+    renderDeletionState();
+  }
+}
+
 function resetPromotionEditor(): void {
   state.editingPromotionId = null;
   state.editingFulfillmentType = 'manual_topup';
@@ -3054,6 +3128,8 @@ async function handleClick(event: MouseEvent): Promise<void> {
     state.adminData = null;
     window.location.hash = '#/admin';
     await bootAdmin();
+  } else if (action === 'delete-promo' && target.dataset.promotionId) {
+    await handlePromotionDelete(target.dataset.promotionId);
   } else if (action === 'refresh-admin') {
     await loadAdminConsole();
   } else if (action === 'edit-promo') {

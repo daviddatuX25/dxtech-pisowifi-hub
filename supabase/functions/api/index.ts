@@ -120,7 +120,32 @@ async function validateVoucherBranches(rows: VoucherRow[]): Promise<void> {
   const branchIds = [...new Set(rows.map((row) => row.branch_id))];
   if (!branchIds.length) return;
   const { data, error } = await client.from('branches').select('id').in('id', branchIds);
-  if (error || (data || []).length !== branchIds.length) throw new HttpError(400, 'Every voucher branch must be configured.', 'BRANCH_INVALID');
+  if (error) throwMappedDatabaseError(error, 'Voucher branches could not be checked.');
+  if ((data || []).length !== branchIds.length) throw new HttpError(400, 'Every voucher branch must be configured.', 'BRANCH_INVALID');
+}
+const SCHEMA_MISMATCH_CODES: Record<string, true> = {
+  '42P10': true,
+  '42P01': true,
+  '42703': true,
+  '42883': true,
+  PGRST202: true,
+  PGRST204: true,
+  PGRST205: true,
+};
+
+function throwMappedDatabaseError(error: { code?: string; message?: string }, fallback: string): never {
+  if (SCHEMA_MISMATCH_CODES[error.code || '']) {
+    throw new HttpError(
+      503,
+      'The Supabase schema is outdated. Apply pending Supabase migrations and deploy the API function.',
+      'SCHEMA_OUTDATED',
+    );
+  }
+  if (error.code === 'PT404') throw new HttpError(404, 'Promo not found.', 'PROMO_NOT_FOUND');
+  if (error.code === 'PT409') {
+    throw new HttpError(409, error.message || 'Capacity conflicts with approved requests.', 'CAPACITY_CONFLICT');
+  }
+  throw new Error(fallback, { cause: error });
 }
 
 function numericValue(value: unknown, label: string, positive: boolean): number {
@@ -740,58 +765,44 @@ async function adminSavePromotion(adminUserId: string, body: JsonBody) {
   if (new Set(branchIds).size !== branchIds.length) throw new HttpError(400, 'Each branch may appear only once.', 'SLOTS_INVALID');
   if (branchIds.length) {
     const { data: branches, error: branchError } = await client.from('branches').select('id').in('id', branchIds);
-    if (branchError || (branches || []).length !== new Set(branchIds).size) throw new HttpError(400, 'Every slot must use a configured branch.', 'BRANCH_INVALID');
+    if (branchError) throwMappedDatabaseError(branchError, 'Promo branches could not be checked.');
+    if ((branches || []).length !== new Set(branchIds).size) throw new HttpError(400, 'Every slot must use a configured branch.', 'BRANCH_INVALID');
   }
 
-  let previous: Record<string, unknown> | null = null;
-  if (id) {
-    const { data, error } = await client.from('promotions').select('id,published,published_at').eq('id', id).maybeSingle();
-    if (error || !data) throw new HttpError(404, 'Promo not found.', 'PROMO_NOT_FOUND');
-    previous = data;
-    const { data: currentSlots, error: slotError } = await client.from('promotion_slots').select('branch_id,approved_count').eq('promotion_id', id);
-    if (slotError) throw new Error(slotError.message);
-    const capacityByBranch = new Map(slots.map((slot) => [slot.branch_id, slot.capacity]));
-    for (const current of currentSlots || []) {
-      const nextCapacity = capacityByBranch.get(current.branch_id);
-      if (nextCapacity === undefined && Number(current.approved_count) > 0) throw new HttpError(409, 'An approved slot cannot be removed.', 'CAPACITY_CONFLICT');
-      if (nextCapacity !== undefined && nextCapacity < Number(current.approved_count)) throw new HttpError(409, 'Capacity cannot be lower than approved requests.', 'CAPACITY_CONFLICT');
+  const voucherInput = body.vouchers;
+  let vouchers: VoucherRow[] = [];
+  if (voucherInput !== undefined && voucherInput !== null) {
+    if (!Array.isArray(voucherInput)) throw new HttpError(400, 'No voucher codes provided.', 'VALIDATION_ERROR');
+    if (voucherInput.length > 0) {
+      if (fulfillmentType !== 'voucher') throw new HttpError(400, 'Voucher codes require voucher fulfillment.', 'FULFILLMENT_INVALID');
+      vouchers = parseVoucherRows(voucherInput);
+      await validateVoucherBranches(vouchers);
     }
   }
 
-  const publishedAt = published ? (previous?.published ? previous.published_at : new Date().toISOString()) : null;
-  const values = { name, description, audience, fulfillment_type: fulfillmentType, requires_student_document: requiresStudentDocument, published, active, notify_on_publish: notifyOnPublish, published_at: publishedAt };
-  const promotionResult = id
-    ? await client.from('promotions').update(values).eq('id', id).select('id').single()
-    : await client.from('promotions').insert(values).select('id').single();
-  if (promotionResult.error || !promotionResult.data) throw new Error(promotionResult.error?.message || 'Promo could not be saved.');
-  const promotionId = promotionResult.data.id;
-  if (slots.length) {
-    const { error: slotsError } = await client.from('promotion_slots').upsert(
-      slots.map((slot) => ({ promotion_id: promotionId, branch_id: slot.branch_id, capacity: slot.capacity })),
-      { onConflict: 'promotion_id,branch_id' },
-    );
-    if (slotsError) throw new Error(slotsError.message);
-  }
-  if (id) {
-    const retained = new Set(branchIds);
-    const { data: oldSlots } = await client.from('promotion_slots').select('branch_id,approved_count').eq('promotion_id', promotionId);
-    const removable = (oldSlots || []).filter((slot) => !retained.has(slot.branch_id) && Number(slot.approved_count) === 0).map((slot) => slot.branch_id);
-    if (removable.length) await client.from('promotion_slots').delete().eq('promotion_id', promotionId).in('branch_id', removable);
-  }
-
-  if (Array.isArray(body.vouchers) && body.vouchers.length > 0) {
-    if (fulfillmentType !== 'voucher') throw new HttpError(400, 'Voucher codes require voucher fulfillment.', 'FULFILLMENT_INVALID');
-    const rows = parseVoucherRows(body.vouchers);
-    await validateVoucherBranches(rows);
-    const { error: voucherError } = await client.from('promotion_vouchers').upsert(
-      rows.map((row) => ({ ...row, promotion_id: promotionId })),
-      { onConflict: 'promotion_id,branch_id,code', ignoreDuplicates: true },
-    );
-    if (voucherError) throw new Error(voucherError.message);
-  }
-
-  await audit(adminUserId, id ? 'update_promotion' : 'create_promotion', 'promotion', promotionId, { published, audience, fulfillmentType });
-  if (published && !previous?.published && notifyOnPublish) {
+  const values = {
+    name,
+    description,
+    audience,
+    fulfillment_type: fulfillmentType,
+    requires_student_document: requiresStudentDocument,
+    published,
+    active,
+    notify_on_publish: notifyOnPublish,
+  };
+  const { data, error } = await client.rpc('save_promotion_with_inventory', {
+    p_admin_user_id: adminUserId,
+    p_promotion_id: id || null,
+    p_values: values,
+    p_slots: slots,
+    p_vouchers: vouchers,
+  });
+  if (error) throwMappedDatabaseError(error, 'Promo could not be saved.');
+  const saved = Array.isArray(data) ? data[0] : data;
+  if (!saved?.promotion_id) throw new Error('Promo could not be saved.');
+  const promotionId = saved.promotion_id as string;
+  const publishedAt = saved.published_at as string | null;
+  if (saved.newly_published === true && notifyOnPublish) {
     await client.from('notification_jobs').insert({ event_type: 'new_promotion', payload: { title: 'New promo available', body: `${name} is now available in the room.`, path: '/' }, dedupe_key: `promotion:${promotionId}:${publishedAt}` }).select('id').maybeSingle();
 
     try {
@@ -800,12 +811,12 @@ async function adminSavePromotion(adminUserId: string, body: JsonBody) {
         .select('branch_id, branches(name)')
         .eq('promotion_id', promotionId);
 
-      const branchIds = (promoSlots || []).map((s) => s.branch_id);
-      if (branchIds.length > 0) {
+      const notificationBranchIds = (promoSlots || []).map((s) => s.branch_id);
+      if (notificationBranchIds.length > 0) {
         const { data: branchProfiles } = await client
           .from('profiles')
           .select('name, email, branch_id')
-          .in('branch_id', branchIds)
+          .in('branch_id', notificationBranchIds)
           .not('email', 'is', null);
 
         if (branchProfiles && branchProfiles.length > 0) {
@@ -833,10 +844,30 @@ async function adminSavePromotion(adminUserId: string, body: JsonBody) {
   return { promotionId };
 }
 
+async function adminDeletePromotion(adminUserId: string, body: JsonBody) {
+  const promotionId = requiredUuid(body, 'promotionId', 'Promotion');
+  const { data, error } = await client.rpc('delete_promotion_with_inventory', {
+    p_admin_user_id: adminUserId,
+    p_promotion_id: promotionId,
+  });
+  if (error) {
+    if (error.code === 'PT409' || error.code === '23503') {
+      throw new HttpError(
+        409,
+        'This promo has request or assigned-inventory history and cannot be deleted. Unpublish or disable it instead.',
+        'PROMO_HAS_HISTORY',
+      );
+    }
+    throwMappedDatabaseError(error, 'Promo could not be deleted.');
+  }
+  return { promotionId: data as string };
+}
+
+
 async function adminImportVouchers(adminUserId: string, body: JsonBody) {
   const promotionId = requiredUuid(body, 'promotionId', 'Promotion');
   const { data: promotion, error: promotionError } = await client.from('promotions').select('id,fulfillment_type').eq('id', promotionId).maybeSingle();
-  if (promotionError) throw new Error(promotionError.message);
+  if (promotionError) throwMappedDatabaseError(promotionError, 'Promo could not be checked.');
   if (!promotion) throw new HttpError(404, 'Promo not found.', 'PROMO_NOT_FOUND');
   if (promotion.fulfillment_type !== 'voucher') throw new HttpError(409, 'Voucher codes require voucher fulfillment.', 'FULFILLMENT_INVALID');
 
@@ -846,7 +877,7 @@ async function adminImportVouchers(adminUserId: string, body: JsonBody) {
     rows.map((row) => ({ ...row, promotion_id: promotionId })),
     { onConflict: 'promotion_id,branch_id,code', ignoreDuplicates: true },
   ).select('id');
-  if (error) throw new Error(error.message);
+  if (error) throwMappedDatabaseError(error, 'Vouchers could not be imported.');
 
   const importedCount = data?.length || 0;
   await audit(adminUserId, 'import_vouchers', 'promotion', promotionId, { importedCount, batchSize: rows.length });
@@ -1021,6 +1052,7 @@ async function handlePost(request: Request, body: JsonBody): Promise<unknown> {
     case 'admin_save_promotion': { const adminUserId = await requireAdmin(request, client); return adminSavePromotion(adminUserId, body); }
     case 'admin_import_vouchers': { const adminUserId = await requireAdmin(request, client); return adminImportVouchers(adminUserId, body); }
     case 'admin_get_promotion_vouchers': { await requireAdmin(request, client); return adminGetPromotionVouchers(body); }
+    case 'admin_delete_promotion': { const adminUserId = await requireAdmin(request, client); return adminDeletePromotion(adminUserId, body); }
     case 'admin_review_promos': { const adminUserId = await requireAdmin(request, client); return adminReviewPromos(adminUserId, body); }
     case 'admin_review_issue': { const adminUserId = await requireAdmin(request, client); return adminReviewIssue(adminUserId, body); }
     case 'admin_document_url': { const adminUserId = await requireAdmin(request, client); return adminDocumentUrl(adminUserId, body); }

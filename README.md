@@ -5,7 +5,7 @@ A branch-aware private notice board for offers and issue reports. Users identify
 ## Stack
 
 - Vite + TypeScript static SPA
-- Cloudflare Pages for the frontend
+- Render or Cloudflare Pages for the static frontend
 - Supabase Postgres, Edge Functions, private Storage, and Auth
 - Optional browser push through Web Push and a scheduled Supabase Edge Function
 
@@ -29,12 +29,12 @@ Without Supabase values, the UI stays in an explicit configuration state and doe
 
 ## Supabase setup
 
-From this directory, link the project and apply the migration:
+From this directory, link the project and apply all pending migrations:
 
 ```sh
 supabase login
 supabase link --project-ref YOUR_PROJECT_REF
-supabase db push
+supabase db push --remote
 ```
 
 Set Edge Function secrets. Keep the service-role and VAPID private keys server-side only:
@@ -58,6 +58,39 @@ supabase functions deploy notify-worker --no-verify-jwt
 ```
 
 The `api` function performs its own profile-token and Supabase Auth checks. The worker performs its own `x-cron-secret` check because it is invoked by a scheduler.
+
+### Updating an existing deployment
+
+Render hosts the frontend; redeploying it does not apply Supabase database migrations or update Edge Functions. Apply database changes before deploying the matching API:
+
+```sh
+supabase migration list
+supabase db push --remote &&
+supabase functions deploy api --no-verify-jwt
+```
+
+Voucher imports require `0006_branch_isolated_vouchers.sql`, which adds the unique `(promotion_id, branch_id, code)` constraint. Without it, the old API can save a promotion and then fail to import its vouchers. `0008_atomic_promotion_save.sql` makes promotion, capacity, voucher, and audit writes transactional: a failed voucher insert rolls back the whole save. The updated API reports `SCHEMA_OUTDATED` if the required schema or RPC is missing.
+
+After updating, edit the existing empty promotion and paste its vouchers again rather than creating another promotion. A failed earlier import does not retain the pasted codes in the database.
+
+`--remote` explicitly targets the linked Supabase project instead of a local Docker stack. Frontend changes, including the Delete button, also require deploying the updated frontend code to Render.
+
+### Deleting promotions
+
+In **Admin → Promotions → Existing Promotions**, choose **Delete** on the target promo and confirm its name. Deletion permanently removes the unused promotion, its unused vouchers, and its branch capacities. Pending publication notifications are canceled, and the deletion is retained in the audit log.
+
+Any customer request (pending, approved, or rejected), claimed voucher, or approved capacity prevents deletion. Unpublish or disable those promotions instead to preserve customer history. Empty duplicates and stocked-but-unused promotions can be deleted.
+
+This requires `0009_delete_promotion.sql`, the updated `api` Edge Function, and the updated frontend. Deletion is admin-only and transactional; database or audit failures leave the promotion intact.
+
+The database regression scripts run against a disposable local database with all migrations applied:
+
+```sh
+psql "$LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/promotion_save.sql
+psql "$LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/promotion_delete.sql
+```
+
+They check voucher saving and rollback, branch isolation, duplicate preservation, approved-capacity conflicts, deletion and history protection, notification cleanup, and RPC access restrictions. Their fixtures are rolled back.
 
 ## Admin access
 
