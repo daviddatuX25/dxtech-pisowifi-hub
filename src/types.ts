@@ -29,15 +29,19 @@ export interface Promotion {
   audience: Audience;
   fulfillmentType: FulfillmentType;
   requiresStudentDocument: boolean;
+  declaredDuration: string | null;
   branchId: string;
   branchName: string;
   capacity: number;
   approvedCount: number;
   availableSlots: number;
+  voucherDurationLabels: string[];
+  voucherHasUndeclaredDuration: boolean;
   myRequestStatus: RequestStatus | null;
   myVoucherCode: string | null;
   publishedAt: string | null;
 }
+
 
 export interface PromoRequest {
   id: string;
@@ -94,6 +98,7 @@ export interface AdminPromotion {
   audience: Audience;
   fulfillmentType: FulfillmentType;
   requiresStudentDocument: boolean;
+  declaredDuration: string | null;
   active: boolean;
   published: boolean;
   notifyOnPublish: boolean;
@@ -102,6 +107,8 @@ export interface AdminPromotion {
   voucherUnassignedCount?: number;
   voucherAssignedCount?: number;
   voucherPools?: VoucherPoolItem[];
+  voucherDurationLabels: string[];
+  voucherHasUndeclaredDuration: boolean;
   slots: Array<{
     branchId: string;
     branchName: string;

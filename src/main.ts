@@ -38,10 +38,14 @@ import {
   parseSpreadsheetFile,
   type ColumnMapping,
   type SpreadsheetParseResult,
+  type ProcessedVoucherBatch,
 } from './importer';
 import { enableNotifications, getNotificationAvailability, requestNotificationPermission } from './notifications';
 import { toast } from './toast';
 import { generateQrSvg } from './qr';
+import { createPromoPosterSvg, posterSvgToPng } from './poster';
+import { openPosterPrintWindow, printPosterSvg } from './print-poster';
+import { summarizePromoDuration } from './promo-duration';
 import { checkRouterReachability, networkMonitor } from './network';
 import type {
   AdminData,
@@ -78,6 +82,28 @@ type View = 'onboarding' | 'home' | 'admin-login' | 'admin' | 'privacy';
 type HomeTab = 'promos' | 'issues';
 type AdminTab = 'overview' | 'promos' | 'requests' | 'issues' | 'branches';
 type OnboardingStep = 'story' | 'form';
+
+interface ShareModalState {
+  promotionId: string;
+  title: string;
+  subtitle: string;
+  url: string;
+  posterDescription: string;
+  durationLabel: string;
+  durationNote: string;
+  durationDataUnavailable: boolean;
+  branchLabel?: string;
+  qrMode: 'placeholder' | 'qr';
+  qrSvg?: string;
+  posterSvg: string;
+  posterPreviewUrl: string;
+  posterLoading: boolean;
+  posterError: string;
+  downloadFormat: 'png' | 'svg' | null;
+  printBusy: boolean;
+  posterVersion: number;
+}
+
 
 interface AppState {
   view: View;
@@ -124,7 +150,7 @@ interface AppState {
   adminPrefillEmail?: string;
   adminPrefillPassword?: string;
   // Sharing modal state with QR
-  shareModal: { isOpen: boolean; title: string; subtitle: string; url: string; qrSvg: string } | null;
+  shareModal: ShareModalState | null;
   // Router connectivity state
   isRouterConnected: boolean;
   routerChecking: boolean;
@@ -182,6 +208,10 @@ const state: AppState = {
   canInstallPwa: false,
 };
 
+let shareModalReturnPromotionId: string | null = null;
+let shareModalNeedsFocus = false;
+const printingPromotionIds = new Set<string>();
+
 function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (character) => {
     if (character === '<') return '&lt;';
@@ -232,7 +262,7 @@ function setToast(message: string): void {
   window.setTimeout(() => {
     if (state.toast === message) {
       state.toast = '';
-      render();
+      renderPreservingPromoEditor();
     }
   }, 4500);
 }
@@ -706,30 +736,68 @@ function renderVoucherDeliveryModal(): string {
 
 function renderShareModal(): string {
   const modal = state.shareModal;
-  if (!modal || !modal.isOpen) return '';
+  if (!modal) return '';
+  const busy = modal.posterLoading || modal.downloadFormat !== null || modal.printBusy;
   return `
-    <div class="modal-backdrop" style="position: fixed; inset: 0; background: rgba(0,0,0,0.82); backdrop-filter: blur(6px); z-index: 10001; overflow-y: auto; padding: 20px; display: flex; align-items: center; justify-content: center;">
-      <section class="share-dialog-card" aria-labelledby="share-modal-title">
+    <div class="share-modal-backdrop">
+      <section class="share-dialog-card" role="dialog" aria-modal="true" aria-labelledby="share-modal-title" tabindex="-1" aria-busy="${busy}">
         <div class="inline-request-head">
           <div class="inline-head-title">
             <span class="badge-claim">${icon(Icons.Share2, 'badge-icon-svg', 13)} I-SHARE ANG PROMO</span>
             <h3 id="share-modal-title">${escapeHtml(modal.title)}</h3>
             <p>${escapeHtml(modal.subtitle)}</p>
           </div>
-          <button class="close-btn-modern" type="button" data-action="close-share-modal" aria-label="Close">${icon(Icons.X, 'close-svg', 16)}</button>
+          <button class="close-btn-modern" type="button" data-action="close-share-modal" aria-label="Close promo sharing dialog">${icon(Icons.X, 'close-svg', 16)}</button>
         </div>
 
-        <div class="qr-presentation-box">
-          <div class="qr-svg-wrapper">
-            ${modal.qrSvg}
+        <section class="poster-share-section" aria-labelledby="poster-preview-title">
+          <div class="poster-share-heading">
+            <div>
+              <h4 id="poster-preview-title">A4 promo poster</h4>
+              <p>Ready to print at A4 size, 300 dpi.</p>
+            </div>
+            <span class="poster-size-badge">210 × 297 mm</span>
           </div>
-          <span class="qr-scan-hint">${icon(Icons.QrCode, 'hint-icon', 13)} I-scan gamit ang cellphone camera para buksan ang promo</span>
-        </div>
+          <div class="poster-preview-frame" aria-live="polite">
+            ${modal.posterLoading ? `
+              <p class="poster-preview-status" role="status"><span class="loading-spinner spinner-accent"></span> Preparing poster preview…</p>
+            ` : modal.posterPreviewUrl ? `
+              <img class="poster-preview-image" src="${modal.posterPreviewUrl}" alt="A4 DXTECH promo poster preview" />
+            ` : `
+              <p class="poster-preview-status">Poster preview is not available.</p>
+            `}
+          </div>
+          ${modal.durationNote ? `<p class="poster-duration-note ${modal.durationDataUnavailable ? 'is-warning' : ''}" ${modal.durationDataUnavailable ? 'role="alert"' : ''}><strong>${escapeHtml(modal.durationLabel)}.</strong> ${escapeHtml(modal.durationNote)}</p>` : `<p class="poster-duration-note"><strong>${escapeHtml(modal.durationLabel)}</strong></p>`}
+          <fieldset class="poster-qr-options">
+            <legend>QR code on poster</legend>
+            <label>
+              <input type="radio" name="posterQrMode" value="placeholder" ${modal.qrMode === 'placeholder' ? 'checked' : ''} ${modal.downloadFormat || modal.printBusy ? 'disabled' : ''} />
+              <span>Leave an empty QR placeholder</span>
+            </label>
+            <label>
+              <input type="radio" name="posterQrMode" value="qr" ${modal.qrMode === 'qr' ? 'checked' : ''} ${modal.downloadFormat || modal.printBusy ? 'disabled' : ''} />
+              <span>Add a scannable promo QR</span>
+            </label>
+          </fieldset>
+          ${modal.posterError ? `<p class="poster-share-error" role="alert">${escapeHtml(modal.posterError)}</p>` : ''}
+          <div class="poster-download-actions">
+            <button class="primary-action" type="button" data-action="download-poster" data-format="png" ${busy || !modal.posterSvg ? 'disabled' : ''}>
+              ${modal.downloadFormat === 'png' ? '<span class="loading-spinner spinner-accent"></span> Creating PNG…' : 'Download A4 PNG'}
+            </button>
+            <button class="btn-secondary-modern" type="button" data-action="download-poster" data-format="svg" ${busy || !modal.posterSvg ? 'disabled' : ''}>
+              ${modal.downloadFormat === 'svg' ? '<span class="loading-spinner spinner-accent"></span> Creating SVG…' : 'Download SVG'}
+            </button>
+            <button class="btn-secondary-modern" type="button" data-action="print-share-poster" ${busy || !modal.posterSvg ? 'disabled' : ''}>
+              ${modal.printBusy ? '<span class="loading-spinner spinner-accent"></span> Preparing print…' : 'Print A4'}
+            </button>
+          </div>
+          ${modal.downloadFormat ? `<p class="poster-busy-note" role="status">Creating the A4 ${modal.downloadFormat.toUpperCase()} download…</p>` : ''}
+        </section>
 
         <div class="share-url-box">
           <span class="share-url-label">Direct Promo Link</span>
           <div class="share-input-row">
-            <input type="text" readonly value="${escapeHtml(modal.url)}" class="admin-input share-url-input" />
+            <input type="text" readonly value="${escapeHtml(modal.url)}" class="admin-input share-url-input" aria-label="Direct promo link" />
             <button class="primary-action btn-copy-share" type="button" data-action="copy-id" data-copy-value="${escapeHtml(modal.url)}">
               ${icon(Icons.Copy, 'btn-icon-svg', 14)} <span>Kopyahin</span>
             </button>
@@ -745,6 +813,284 @@ function renderShareModal(): string {
       </section>
     </div>
   `;
+}
+
+function renderPreservingPromoEditor(): void {
+  const editor = appRoot.querySelector<HTMLFormElement>('#admin-promo-form');
+  const preserveEditor = editor?.dataset.promotionId === (state.editingPromotionId || '');
+  render();
+  if (editor && preserveEditor) appRoot.querySelector('#admin-promo-form')?.replaceWith(editor);
+}
+
+async function refreshSharePoster(modal: ShareModalState, qrMode: ShareModalState['qrMode']): Promise<void> {
+  if (state.shareModal !== modal) return;
+  modal.qrMode = qrMode;
+  modal.qrSvg = undefined;
+  modal.posterSvg = '';
+  modal.posterPreviewUrl = '';
+  modal.posterError = '';
+  modal.posterLoading = true;
+  const focusedQrMode = document.activeElement instanceof HTMLInputElement
+    && document.activeElement.name === 'posterQrMode'
+    ? document.activeElement.value
+    : null;
+  const version = ++modal.posterVersion;
+  renderPreservingPromoEditor();
+  if (focusedQrMode) {
+    appRoot.querySelector<HTMLInputElement>(`input[name="posterQrMode"][value="${focusedQrMode}"]`)?.focus();
+  }
+
+  try {
+    const qrSvg = qrMode === 'qr' ? await generateQrSvg(modal.url) : undefined;
+    if (state.shareModal !== modal || modal.posterVersion !== version) return;
+    const posterSvg = await createPromoPosterSvg({
+      title: modal.title,
+      description: modal.posterDescription,
+      durationLabel: modal.durationLabel,
+      durationNote: modal.durationNote || undefined,
+      branchLabel: modal.branchLabel,
+      qrSvg,
+    });
+    if (state.shareModal !== modal || modal.posterVersion !== version) return;
+    modal.qrSvg = qrSvg;
+    modal.posterSvg = posterSvg;
+    modal.posterPreviewUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(posterSvg)}`;
+    modal.posterLoading = false;
+  } catch (error) {
+    if (state.shareModal !== modal || modal.posterVersion !== version) return;
+    modal.posterLoading = false;
+    modal.posterError = error instanceof Error ? error.message : 'The poster could not be generated. Please try again.';
+  }
+  renderPreservingPromoEditor();
+  if (focusedQrMode && state.shareModal === modal) {
+    appRoot.querySelector<HTMLInputElement>(`input[name="posterQrMode"][value="${focusedQrMode}"]`)?.focus();
+  }
+}
+
+function getPromoDurationSummary(promo: Promotion | AdminPromotion) {
+  return summarizePromoDuration({
+    declaredDuration: promo.declaredDuration,
+    fulfillmentType: promo.fulfillmentType,
+    voucherDurationLabels: promo.voucherDurationLabels,
+    voucherHasUndeclaredDuration: promo.voucherHasUndeclaredDuration,
+  });
+}
+
+function getPromoBranchLabel(promo: Promotion | AdminPromotion): string | undefined {
+  return 'branchName' in promo && promo.branchName
+    ? promo.branchName
+    : 'slots' in promo && promo.slots.length === 1
+      ? promo.slots[0].branchName
+      : undefined;
+}
+
+function openShareModal(promo: Promotion | AdminPromotion, opener: HTMLElement | null): void {
+  const duration = getPromoDurationSummary(promo);
+  const description = promo.description?.trim() || '';
+  const branchLabel = getPromoBranchLabel(promo);
+  const url = `${window.location.origin}${window.location.pathname}#/promo/${promo.id}`;
+  const modal: ShareModalState = {
+    promotionId: promo.id,
+    title: promo.name,
+    subtitle: description || 'I-scan ang QR code o kopyahin ang link para i-share.',
+    posterDescription: description,
+    url,
+    durationLabel: duration.durationLabel,
+    durationNote: duration.durationNote,
+    durationDataUnavailable: duration.dataUnavailable,
+    branchLabel,
+    qrMode: 'placeholder',
+    posterSvg: '',
+    posterPreviewUrl: '',
+    posterLoading: true,
+    posterError: '',
+    downloadFormat: null,
+    printBusy: false,
+    posterVersion: 0,
+  };
+  state.shareModal = modal;
+  shareModalReturnPromotionId = opener?.dataset.promotionId || promo.id;
+  shareModalNeedsFocus = true;
+  void refreshSharePoster(modal, 'placeholder');
+}
+
+async function printSharePoster(): Promise<void> {
+  const modal = state.shareModal;
+  if (!modal || !modal.posterSvg || modal.posterLoading || modal.downloadFormat || modal.printBusy) return;
+  const printButtonFocused = document.activeElement instanceof HTMLButtonElement
+    && document.activeElement.dataset.action === 'print-share-poster';
+
+  let printWindow: Window;
+  try {
+    printWindow = openPosterPrintWindow(modal.title);
+  } catch (error) {
+    modal.posterError = error instanceof Error ? error.message : 'Allow pop-ups to print the A4 promo poster.';
+    renderPreservingPromoEditor();
+    return;
+  }
+
+  const posterSvg = modal.posterSvg;
+  modal.posterError = '';
+  modal.printBusy = true;
+  renderPreservingPromoEditor();
+  if (printButtonFocused) appRoot.querySelector<HTMLElement>('.share-dialog-card .close-btn-modern')?.focus();
+  try {
+    await printPosterSvg(printWindow, posterSvg, modal.title);
+  } catch (error) {
+    printWindow.close();
+    if (state.shareModal === modal) {
+      modal.posterError = error instanceof Error ? error.message : 'The A4 promo poster could not be printed.';
+    }
+  } finally {
+    if (state.shareModal === modal) {
+      modal.printBusy = false;
+      renderPreservingPromoEditor();
+    }
+  }
+}
+
+function reportPromoPrintError(message: string): void {
+  state.error = message;
+  state.toast = '';
+  renderPreservingPromoEditor();
+  if (message) toast.error(message);
+}
+
+
+async function printExistingPromo(promo: AdminPromotion, printWindow: Window): Promise<void> {
+  printingPromotionIds.add(promo.id);
+  const printButtons = Array.from(appRoot.querySelectorAll<HTMLButtonElement>('[data-action="print-promo"]'))
+    .filter((button) => button.dataset.promotionId === promo.id);
+  for (const button of printButtons) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    const label = button.querySelector<HTMLElement>('[data-print-label]');
+    if (label) label.textContent = 'Preparing…';
+  }
+
+  try {
+    const duration = getPromoDurationSummary(promo);
+    const posterSvg = await createPromoPosterSvg({
+      title: promo.name,
+      description: promo.description?.trim() || '',
+      durationLabel: duration.durationLabel,
+      durationNote: duration.durationNote || undefined,
+      branchLabel: getPromoBranchLabel(promo),
+    });
+    await printPosterSvg(printWindow, posterSvg, promo.name);
+  } catch (error) {
+    printWindow.close();
+    reportPromoPrintError(error instanceof Error ? error.message : 'The A4 promo poster could not be printed.');
+  } finally {
+    printingPromotionIds.delete(promo.id);
+    const currentButtons = Array.from(appRoot.querySelectorAll<HTMLButtonElement>('[data-action="print-promo"]'))
+      .filter((button) => button.dataset.promotionId === promo.id);
+    for (const button of currentButtons) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      const label = button.querySelector<HTMLElement>('[data-print-label]');
+      if (label) label.textContent = 'Print';
+    }
+  }
+}
+
+function closeShareModal(): void {
+  const modal = state.shareModal;
+  if (modal) modal.posterVersion++;
+  state.shareModal = null;
+  const returnPromotionId = shareModalReturnPromotionId;
+  shareModalReturnPromotionId = null;
+  shareModalNeedsFocus = false;
+  renderPreservingPromoEditor();
+  if (returnPromotionId) {
+    Array.from(appRoot.querySelectorAll<HTMLElement>('[data-action="share-promo"]'))
+      .find((element) => element.dataset.promotionId === returnPromotionId)?.focus();
+  }
+}
+
+async function downloadSharePoster(format: 'png' | 'svg'): Promise<void> {
+  const modal = state.shareModal;
+  if (!modal || !modal.posterSvg || modal.posterLoading || modal.downloadFormat || modal.printBusy) return;
+  const posterSvg = modal.posterSvg;
+  const posterVersion = modal.posterVersion;
+  const downloadButtonFocused = document.activeElement instanceof HTMLButtonElement
+    && document.activeElement.dataset.action === 'download-poster'
+    && document.activeElement.dataset.format === format;
+  modal.downloadFormat = format;
+  modal.posterError = '';
+  renderPreservingPromoEditor();
+  if (downloadButtonFocused) appRoot.querySelector<HTMLElement>('.share-dialog-card .close-btn-modern')?.focus();
+
+  let objectUrl: string | null = null;
+  let anchor: HTMLAnchorElement | null = null;
+  try {
+    const blob = format === 'png'
+      ? await posterSvgToPng(posterSvg)
+      : new Blob([posterSvg], { type: 'image/svg+xml;charset=utf-8' });
+    if (state.shareModal !== modal || modal.posterVersion !== posterVersion) return;
+    const baseName = modal.title
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/gi, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'dxtech-promo';
+    objectUrl = URL.createObjectURL(blob);
+    anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = `${baseName}-promo-poster.${format}`;
+    anchor.style.display = 'none';
+    document.body.append(anchor);
+    anchor.click();
+  } catch (error) {
+    if (state.shareModal === modal) {
+      modal.posterError = error instanceof Error ? error.message : `The ${format.toUpperCase()} poster could not be downloaded.`;
+    }
+  } finally {
+    anchor?.remove();
+    if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl!), 1000);
+    if (state.shareModal === modal) {
+      modal.downloadFormat = null;
+      renderPreservingPromoEditor();
+      if (downloadButtonFocused) {
+        appRoot.querySelector<HTMLButtonElement>(`[data-action="download-poster"][data-format="${format}"]`)?.focus();
+      }
+    }
+  }
+}
+
+function handleShareModalKeydown(event: KeyboardEvent): void {
+  const modal = state.shareModal;
+  if (!modal) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeShareModal();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const dialog = appRoot.querySelector<HTMLElement>('.share-dialog-card');
+  if (!dialog) return;
+  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+  )).filter((element) => element.getAttribute('aria-hidden') !== 'true');
+  if (!focusable.length) {
+    event.preventDefault();
+    dialog.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (!dialog.contains(document.activeElement)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+    return;
+  }
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function renderPisoWifiFooter(): string {
@@ -1359,12 +1705,12 @@ function renderAdminOverview(data: AdminData): string {
   `;
 }
 
-function renderSpreadsheetMapper(parsed: SpreadsheetParseResult): string {
+function renderSpreadsheetMapper(parsed: SpreadsheetParseResult, mappedOverride?: ProcessedVoucherBatch): string {
   const branches = state.adminData?.branches || [];
   const headers = parsed.headers;
   const mapping = state.importerMapping;
   const selectedBranch = state.importerSelectedBranchId && state.importerSelectedBranchId !== 'all' ? state.importerSelectedBranchId : undefined;
-  const processed = applyColumnMapping(
+  const processed = mappedOverride || applyColumnMapping(
     parsed,
     mapping,
     branches,
@@ -1655,6 +2001,22 @@ function renderAdminPromos(data: AdminData): string {
     data.branches
   );
 
+  const importerSelectedBranchId = state.importerSelectedBranchId && state.importerSelectedBranchId !== 'all'
+    ? state.importerSelectedBranchId
+    : undefined;
+  const mappedSpreadsheet = state.importerActiveTab === 'file' && state.importerSpreadsheet
+    ? applyColumnMapping(
+      state.importerSpreadsheet,
+      state.importerMapping,
+      data.branches,
+      importerSelectedBranchId,
+      state.importerFallbackDuration
+    )
+    : null;
+  const importerPreviewCount = state.importerActiveTab === 'paste'
+    ? parsedPaste.validCount
+    : mappedSpreadsheet?.validCount || 0;
+
   const slots = data.branches.map((branch) => {
     const slot = editing?.slots.find((item) => item.branchId === branch.id);
     return `
@@ -1689,6 +2051,12 @@ function renderAdminPromos(data: AdminData): string {
             <label class="admin-field admin-field-wide">
               <span class="admin-label">Description / Offer Details <em>(Optional)</em></span>
               <textarea name="description" rows="3" maxlength="500" placeholder="Describe the promo perks, validity, and instructions..." class="admin-textarea">${escapeHtml(editing?.description || '')}</textarea>
+            </label>
+
+            <label class="admin-field admin-field-wide">
+              <span class="admin-label">Declared promo time <em>(Optional)</em></span>
+              <input name="declaredDuration" type="text" maxlength="80" value="${escapeHtml(editing?.declaredDuration || '')}" placeholder="e.g. 1 Hour or 45 Minutes" class="admin-input" />
+              <small class="admin-field-hint">Saved display and print time for this promotion. This does not rewrite issued or imported voucher durations.</small>
             </label>
 
             <div class="admin-field admin-field-wide">
@@ -1730,6 +2098,12 @@ function renderAdminPromos(data: AdminData): string {
                     ${icon(Icons.UploadCloud, 'tab-icon', 13)} <span>Spreadsheet File (CSV / XLSX)</span>
                   </button>
                 </div>
+                <div class="admin-field batch-duration-control">
+                  <label for="importerFallbackDuration" class="admin-label">Common Batch Voucher Duration</label>
+                  <input id="importerFallbackDuration" name="importerFallbackDuration" maxlength="80" value="${escapeHtml(state.importerFallbackDuration)}" class="admin-input" aria-describedby="importer-batch-duration-help" />
+                  <small class="admin-field-hint" id="importer-batch-duration-help">Enter the shared time for any code without its own duration. Comma-separated voucher codes all receive this one duration; spreadsheet row times always take precedence.</small>
+                  ${state.importerFallbackDuration.trim() ? `<small class="importer-batch-duration-preview" role="status">Preview: “${escapeHtml(state.importerFallbackDuration.trim())}” · ${importerPreviewCount} valid code${importerPreviewCount === 1 ? '' : 's'} in this batch.</small>` : ''}
+                </div>
 
                 ${state.importerActiveTab === 'paste' ? `
                   <div class="admin-field">
@@ -1738,9 +2112,6 @@ function renderAdminPromos(data: AdminData): string {
                       <span class="importer-stat-chip ${parsedPaste.duplicateCount ? 'is-warn' : ''}">${parsedPaste.validCount} valid codes detected</span>
                     </div>
                     <textarea name="voucherTextDraft" rows="4" placeholder="Paste codes here (e.g. DX-8841, DX-8842 or tab-separated)..." class="admin-textarea" style="font-family: ui-monospace, monospace;">${escapeHtml(state.importerTextDraft)}</textarea>
-                    <div style="display: flex; gap: 12px; align-items: center;">
-                      <input name="importerFallbackDuration" placeholder="Optional duration (e.g. 1 Hour, 5 Hours)" value="${escapeHtml(state.importerFallbackDuration)}" class="admin-input" style="flex: 1;" />
-                    </div>
                     ${parsedPaste.duplicateCount > 0 ? `<small class="admin-field-hint" style="color: #fbbf24;">${icon(Icons.AlertTriangle, 'warn', 12)} Filtered out ${parsedPaste.duplicateCount} duplicate codes in this batch.</small>` : ''}
                   </div>
                 ` : `
@@ -1757,13 +2128,13 @@ function renderAdminPromos(data: AdminData): string {
                       </div>
                     </div>
 
-                    ${state.importerSpreadsheet ? renderSpreadsheetMapper(state.importerSpreadsheet) : ''}
+                    ${state.importerSpreadsheet ? renderSpreadsheetMapper(state.importerSpreadsheet, mappedSpreadsheet || undefined) : ''}
                   </div>
                 `}
 
                 <div class="admin-field">
-                  <span class="admin-label">Voucher Source Router / Branch <b>*</b></span>
-                  <select name="importerSelectedBranchId" class="admin-select" required>
+                  <span class="admin-label">Voucher Source Router / Branch ${importerPreviewCount > 0 ? '<b>*</b>' : ''}</span>
+                  <select name="importerSelectedBranchId" class="admin-select" ${importerPreviewCount > 0 ? 'required' : ''}>
                     <option value="" disabled ${!state.importerSelectedBranchId ? 'selected' : ''}>-- Select Source Branch / Router --</option>
                     ${data.branches.map((branch) => `<option value="${escapeHtml(branch.id)}" ${state.importerSelectedBranchId === branch.id ? 'selected' : ''}>${escapeHtml(branch.name)}</option>`).join('')}
                   </select>
@@ -1884,6 +2255,9 @@ function renderAdminPromotion(promo: AdminPromotion): string {
             : `${available} total open / ${totalCapacity} capacity`}
         </span>
         <div class="admin-promo-actions">
+          <button class="btn-edit-promo" type="button" data-action="print-promo" data-promotion-id="${escapeHtml(promo.id)}" ${printingPromotionIds.has(promo.id) ? 'disabled aria-busy="true"' : ''}>
+            <span data-print-label>${printingPromotionIds.has(promo.id) ? 'Preparing…' : 'Print'}</span>
+          </button>
           <button class="btn-edit-promo" type="button" data-action="share-promo" data-promotion-id="${escapeHtml(promo.id)}">
             ${icon(Icons.Share2, 'btn-icon-svg', 13)} <span>Share / QR</span>
           </button>
@@ -2385,6 +2759,33 @@ function runMotion(): void {
 }
 
 function render(): void {
+  const previousDialog = appRoot.querySelector<HTMLElement>('.share-dialog-card');
+  const previousActive = document.activeElement;
+  const previousAction = previousDialog && previousActive instanceof HTMLElement && previousDialog.contains(previousActive)
+    && previousActive.dataset.action
+    ? {
+      action: previousActive.dataset.action,
+      format: previousActive.dataset.format,
+      copyValue: previousActive.dataset.copyValue,
+      shareUrl: previousActive.dataset.shareUrl,
+      shareTitle: previousActive.dataset.shareTitle,
+      index: Array.from(previousDialog.querySelectorAll<HTMLElement>('[data-action]'))
+        .filter((element) => element.dataset.action === previousActive.dataset.action
+          && element.dataset.format === previousActive.dataset.format
+          && element.dataset.copyValue === previousActive.dataset.copyValue
+          && element.dataset.shareUrl === previousActive.dataset.shareUrl
+          && element.dataset.shareTitle === previousActive.dataset.shareTitle)
+        .indexOf(previousActive),
+    }
+    : null;
+  const previousQrMode = previousDialog && previousActive instanceof HTMLInputElement
+    && previousDialog.contains(previousActive) && previousActive.name === 'posterQrMode'
+    ? previousActive.value
+    : null;
+  const previousShareInputLabel = previousDialog && previousActive instanceof HTMLInputElement
+    && previousDialog.contains(previousActive)
+    ? previousActive.getAttribute('aria-label')
+    : null;
   document.title = state.view === 'admin' || state.view === 'admin-login' ? `Admin · ${appConfig.appName}` : appConfig.appName;
   let content = '';
   if (state.view === 'onboarding') content = renderOnboarding();
@@ -2406,6 +2807,25 @@ function render(): void {
   }
 
   appRoot.innerHTML = content;
+  const nextDialog = appRoot.querySelector<HTMLElement>('.share-dialog-card');
+  if (shareModalNeedsFocus && state.shareModal) {
+    nextDialog?.querySelector<HTMLElement>('.close-btn-modern')?.focus();
+    shareModalNeedsFocus = false;
+  } else if (nextDialog && previousAction) {
+    const matchingActions = Array.from(nextDialog.querySelectorAll<HTMLElement>('[data-action]'))
+      .filter((element) => element.dataset.action === previousAction.action
+        && element.dataset.format === previousAction.format
+        && element.dataset.copyValue === previousAction.copyValue
+        && element.dataset.shareUrl === previousAction.shareUrl
+        && element.dataset.shareTitle === previousAction.shareTitle);
+    matchingActions[previousAction.index]?.focus();
+  } else if (nextDialog && previousQrMode) {
+    Array.from(nextDialog.querySelectorAll<HTMLInputElement>('input[name="posterQrMode"]'))
+      .find((element) => element.value === previousQrMode)?.focus();
+  } else if (nextDialog && previousShareInputLabel) {
+    Array.from(nextDialog.querySelectorAll<HTMLInputElement>('input[aria-label]'))
+      .find((element) => element.getAttribute('aria-label') === previousShareInputLabel)?.focus();
+  }
   runMotion();
 }
 
@@ -2811,7 +3231,7 @@ async function handlePromotionDelete(promotionId: string): Promise<void> {
       state.voucherModalList = null;
       state.voucherModalLoading = false;
     }
-    if (state.shareModal?.url.endsWith(`#/promo/${promotionId}`)) state.shareModal = null;
+    if (state.shareModal?.promotionId === promotionId) closeShareModal();
     if (state.activePromoRequest === promotionId) state.activePromoRequest = null;
     if (state.targetPromoId === promotionId) state.targetPromoId = null;
     if (state.publicData) {
@@ -2861,6 +3281,11 @@ function resetPromotionEditor(): void {
 
 async function handlePromotionSave(form: HTMLFormElement): Promise<void> {
   if (!state.adminToken || !state.adminData) return;
+  const reportSaveError = (message: string): void => {
+    const preserveEditor = appRoot.querySelector('#admin-promo-form') === form;
+    setError(message);
+    if (preserveEditor) appRoot.querySelector('#admin-promo-form')?.replaceWith(form);
+  };
   const fulfillmentType = state.editingFulfillmentType;
   let slots: Array<{ branchId: string; capacity: number }> = [];
   let vouchers: Array<{ code: string; durationLabel?: string; branchId: string }> = [];
@@ -2875,8 +3300,12 @@ async function handlePromotionSave(form: HTMLFormElement): Promise<void> {
       const parsed = applyColumnMapping(state.importerSpreadsheet, state.importerMapping, branches, selectedBranchId, state.importerFallbackDuration);
       vouchers = parsed.vouchers as Array<{ code: string; durationLabel?: string; branchId: string }>;
     }
+    if (vouchers.some((voucher) => !voucher.durationLabel?.trim())) {
+      reportSaveError('Every imported voucher needs a declared time. Enter the Common Batch Voucher Duration for codes without per-row times, or add a duration to every spreadsheet row before saving.');
+      return;
+    }
     if (vouchers.length > 0 && vouchers.some((v) => !v.branchId)) {
-      setError('Please select a voucher source branch for imported vouchers.');
+      reportSaveError('Please select a voucher source branch for imported vouchers.');
       return;
     }
     // Voucher inventory, not manual slot quotas, controls availability.
@@ -2887,20 +3316,23 @@ async function handlePromotionSave(form: HTMLFormElement): Promise<void> {
       capacity: Number(formString(form, `slot-${branch.id}`)),
     }));
     if (!slots.length) {
-      setError('Please add at least one branch first.');
+      reportSaveError('Please add at least one branch first.');
       return;
     }
     if (slots.some((slot) => !Number.isInteger(slot.capacity) || slot.capacity < 0)) {
-      setError('Capacity values must be integers of 0 or greater.');
+      reportSaveError('Capacity values must be integers of 0 or greater.');
       return;
     }
   }
+
+  const declaredDuration = formString(form, 'declaredDuration').trim() || null;
 
   try {
     await savePromotion(state.adminToken, {
       id: state.editingPromotionId || undefined,
       name: formString(form, 'name').trim(),
       description: formString(form, 'description').trim(),
+      declaredDuration,
       audience: formString(form, 'audience'),
       fulfillmentType,
       active: form.querySelector<HTMLInputElement>('input[name="active"]')?.checked === true,
@@ -2913,7 +3345,7 @@ async function handlePromotionSave(form: HTMLFormElement): Promise<void> {
     await loadAdminConsole();
     setToast(vouchers.length ? `Promotion saved with ${vouchers.length} vouchers imported.` : 'Promotion saved successfully.');
   } catch (error) {
-    setError(error instanceof Error ? error.message : 'Failed to save promotion.');
+    reportSaveError(error instanceof Error ? error.message : 'Failed to save promotion.');
   }
 }
 
@@ -2982,25 +3414,43 @@ async function handleClick(event: MouseEvent): Promise<void> {
   } else if (action === 'back-to-story') {
     state.onboardingStep = 'story';
     render();
+  } else if (action === 'print-promo' && target.dataset.promotionId) {
+    const promo = state.adminData?.promotions.find((item) => item.id === target.dataset.promotionId);
+    if (!promo) {
+      reportPromoPrintError('Promo details are unavailable. Refresh the promotion list and try printing again.');
+      return;
+    }
+    if (printingPromotionIds.has(promo.id)) {
+      if (target instanceof HTMLButtonElement) target.disabled = true;
+      return;
+    }
+    try {
+      const printWindow = openPosterPrintWindow(promo.name);
+      if (target instanceof HTMLButtonElement) {
+        void printExistingPromo(promo, printWindow);
+      } else {
+        printWindow.close();
+      }
+    } catch (error) {
+      reportPromoPrintError(error instanceof Error ? error.message : 'Allow pop-ups to print the A4 promo poster.');
+    }
   } else if (action === 'share-promo' && target.dataset.promotionId) {
     const promoId = target.dataset.promotionId;
-    const promo = state.publicData?.promotions.find((item) => item.id === promoId)
-      || state.adminData?.promotions.find((item) => item.id === promoId);
-    const shareUrl = `${window.location.origin}${window.location.pathname}#/promo/${promoId}`;
-    const title = promo?.name || 'Exclusive Promo';
-    const subtitle = promo?.description || 'I-scan ang QR code o kopyahin ang link para i-share.';
-    const qrSvg = await generateQrSvg(shareUrl);
-    state.shareModal = {
-      isOpen: true,
-      title,
-      subtitle,
-      url: shareUrl,
-      qrSvg,
-    };
-    render();
+    const promo = state.view === 'admin'
+      ? state.adminData?.promotions.find((item) => item.id === promoId) || state.publicData?.promotions.find((item) => item.id === promoId)
+      : state.publicData?.promotions.find((item) => item.id === promoId) || state.adminData?.promotions.find((item) => item.id === promoId);
+    if (!promo) {
+      setError('Promo details are unavailable. Refresh the promotion list and try sharing again.');
+      return;
+    }
+    openShareModal(promo, target.closest('button'));
+  } else if (action === 'print-share-poster') {
+    void printSharePoster();
   } else if (action === 'close-share-modal') {
-    state.shareModal = null;
-    render();
+    closeShareModal();
+  } else if (action === 'download-poster') {
+    const format = target.dataset.format;
+    if (format === 'png' || format === 'svg') void downloadSharePoster(format);
   } else if (action === 'native-share') {
     const url = target.dataset.shareUrl || window.location.href;
     const title = target.dataset.shareTitle || 'DXTECH Promo';
@@ -3184,20 +3634,64 @@ async function handleClick(event: MouseEvent): Promise<void> {
   }
 }
 
-function rerenderPreservingFocus(target: HTMLInputElement | HTMLTextAreaElement): void {
-  const selectionStart = target.selectionStart;
-  const selectionEnd = target.selectionEnd;
+function rerenderPreservingFocus(target: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement): void {
+  const selectionTarget = target instanceof HTMLTextAreaElement
+    ? target
+    : target instanceof HTMLInputElement && ['email', 'password', 'search', 'tel', 'text', 'url'].includes(target.type)
+      ? target
+      : null;
+  const selectionStart = selectionTarget?.selectionStart ?? null;
+  const selectionEnd = selectionTarget?.selectionEnd ?? null;
   const name = target.name;
   const filter = target.dataset.filter || '';
+  const form = target.closest<HTMLFormElement>('#admin-promo-form');
+  const controls = form
+    ? Array.from(form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name], textarea[name], select[name]'))
+    : [];
+  const snapshots = controls.map((element, index) => ({
+    name: element.name,
+    occurrence: controls.slice(0, index).filter((previous) => previous.name === element.name).length,
+    value: element.value,
+    checked: element instanceof HTMLInputElement ? element.checked : undefined,
+    selectedValues: element instanceof HTMLSelectElement
+      ? Array.from(element.selectedOptions, (option) => option.value)
+      : undefined,
+  }));
+  const focusedOccurrence = controls.slice(0, controls.indexOf(target)).filter((element) => element.name === name).length;
   render();
-  const next = Array.from(appRoot.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')).find(
-    (element) => element.name === name && (element.dataset.filter || '') === filter
-  );
-  if (!next) return;
-  next.focus();
-  if (selectionStart !== null && selectionEnd !== null) next.setSelectionRange(selectionStart, selectionEnd);
-}
 
+  const nextForm = form ? appRoot.querySelector<HTMLFormElement>('#admin-promo-form') : null;
+  const nextControls = nextForm
+    ? Array.from(nextForm.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input[name], textarea[name], select[name]'))
+    : [];
+  for (const snapshot of snapshots) {
+    const field = nextControls.filter((element) => element.name === snapshot.name)[snapshot.occurrence];
+    if (!field || (field instanceof HTMLInputElement && field.type === 'file')) continue;
+    if (field instanceof HTMLInputElement && (field.type === 'checkbox' || field.type === 'radio')) {
+      field.checked = snapshot.checked === true;
+    } else if (field instanceof HTMLSelectElement && snapshot.selectedValues) {
+      for (const option of Array.from(field.options)) option.selected = snapshot.selectedValues.includes(option.value);
+    } else {
+      field.value = snapshot.value;
+    }
+  }
+
+  const next = nextForm
+    ? nextControls.filter((element) => element.name === name)[focusedOccurrence]
+    : Array.from(appRoot.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select')).find(
+      (element) => element.name === name && (element.dataset.filter || '') === filter
+    );
+  if (!(next instanceof HTMLInputElement || next instanceof HTMLTextAreaElement || next instanceof HTMLSelectElement)) return;
+  next.focus();
+  if ((next instanceof HTMLInputElement || next instanceof HTMLTextAreaElement) && selectionStart !== null && selectionEnd !== null) {
+    try {
+      next.setSelectionRange(selectionStart, selectionEnd);
+    } catch {
+      // This input type does not expose a text selection range.
+    }
+  }
+
+}
 function handleInput(event: Event): void {
   const target = event.target;
   if (target instanceof HTMLInputElement && target.matches('[data-device-id]')) {
@@ -3216,18 +3710,25 @@ function handleInput(event: Event): void {
 
 async function handleFilter(event: Event): Promise<void> {
   const target = event.target;
+  if (target instanceof HTMLInputElement && target.name === 'posterQrMode'
+    && (target.value === 'placeholder' || target.value === 'qr') && state.shareModal) {
+    void refreshSharePoster(state.shareModal, target.value);
+    return;
+  }
   if (target instanceof HTMLInputElement && target.name === 'voucherFile' && target.files && target.files.length > 0) {
     const file = target.files[0];
     try {
-      state.loading = true;
-      render();
       state.importerSpreadsheet = await parseSpreadsheetFile(file);
       state.importerMapping = state.importerSpreadsheet.detectedMapping;
       state.loading = false;
-      render();
+      rerenderPreservingFocus(target);
     } catch (err) {
       state.loading = false;
-      setError(err instanceof Error ? err.message : 'Could not parse spreadsheet file.');
+      const message = err instanceof Error ? err.message : 'Could not parse spreadsheet file.';
+      state.error = message;
+      state.toast = '';
+      rerenderPreservingFocus(target);
+      toast.error(message);
     }
     return;
   }
@@ -3244,7 +3745,7 @@ async function handleFilter(event: Event): Promise<void> {
     } else if (configType === 'start-row') {
       state.importerSpreadsheet.dataStartRowIndex = val;
     }
-    render();
+    rerenderPreservingFocus(target);
     return;
   }
   if (target instanceof HTMLSelectElement && target.dataset.mapper) {
@@ -3254,17 +3755,17 @@ async function handleFilter(event: Event): Promise<void> {
     else if (field === 'time') state.importerMapping.timeColIndex = val;
     else if (field === 'label') state.importerMapping.labelColIndex = val;
     else if (field === 'branch') state.importerMapping.branchColIndex = val;
-    render();
+    rerenderPreservingFocus(target);
     return;
   }
   if (target instanceof HTMLInputElement && target.name === 'fulfillmentType') {
     state.editingFulfillmentType = target.value as FulfillmentType;
-    render();
+    rerenderPreservingFocus(target);
     return;
   }
   if (target instanceof HTMLSelectElement && target.name === 'importerSelectedBranchId') {
     state.importerSelectedBranchId = target.value;
-    render();
+    rerenderPreservingFocus(target);
     return;
   }
   if (target instanceof HTMLInputElement && target.type === 'file' && target.files && target.files.length > 0) {
@@ -3357,6 +3858,7 @@ window.addEventListener('appinstalled', () => {
 appRoot.addEventListener('click', (event) => {
   void handleClick(event);
 });
+appRoot.addEventListener('keydown', handleShareModalKeydown);
 appRoot.addEventListener('input', handleInput);
 appRoot.addEventListener('change', (event) => {
   void handleFilter(event);

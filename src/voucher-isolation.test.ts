@@ -158,9 +158,12 @@ describe('Voucher Branch Isolation & Multi-Branch Pools', () => {
         published: true,
         notifyOnPublish: false,
         publishedAt: '2026-09-19T00:00:00Z',
+        declaredDuration: null,
         voucherTotalCount: 30,
         voucherUnassignedCount: 15,
         voucherAssignedCount: 15,
+        voucherDurationLabels: ['1 Hour'],
+        voucherHasUndeclaredDuration: false,
         slots: [
           {
             branchId: 'branch-candon-uuid',

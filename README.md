@@ -88,9 +88,44 @@ The database regression scripts run against a disposable local database with all
 ```sh
 psql "$LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/promotion_save.sql
 psql "$LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/promotion_delete.sql
+psql "$LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/promotion_declared_duration.sql
 ```
 
 They check voucher saving and rollback, branch isolation, duplicate preservation, approved-capacity conflicts, deletion and history protection, notification cleanup, and RPC access restrictions. Their fixtures are rolled back.
+
+### Voucher times and A4 promo posters
+
+- **Quick Paste Codes:** paste comma-separated codes and enter **Common Batch Voucher Duration** once (for example, `1 Hour`). Every code without its own time receives that duration.
+- **Spreadsheet imports:** use the same common duration for rows without a time. A duration supplied by a spreadsheet row takes precedence. New voucher imports require a declared time for every row; existing legacy inventory remains readable.
+- **Share / QR:** the sharing dialog previews the saved promo title, description, and declared promo time on the approved A4 poster. It defaults to an empty QR box for later placement; choose **Add a scannable promo QR** to embed the actual promo link. Private voucher codes are never printed.
+- Download a **2480 × 3508 PNG with 300-dpi metadata** or a self-contained **210 × 297 mm SVG**. The embedded poster fonts are self-hosted, with their SIL Open Font Licenses in `src/assets/poster/`.
+- **Declared promo time:** edit this optional field on any existing or new promotion. It is stored separately in `promotions.declared_duration` (up to 80 characters), takes priority on posters, and does not rewrite imported voucher times or customer claims. Clearing it restores the inventory-derived fallback: a single known available time is shown exactly, while mixed/undeclared inventory and manual top-ups are labelled honestly.
+
+The labelled sample artwork is available at `/promo-poster-a4-preview.png` and `/promo-poster-a4-preview.svg`. Its sample title and time are not live promotion data.
+
+Editable declarations require `0010_promotion_declared_duration.sql`, which backfills existing promos only when every voucher has the same nonblank time. Mixed or unknown inventory is not guessed. Apply migrations before deploying the matching API, then deploy the updated Render frontend:
+
+```sh
+supabase db push --remote &&
+supabase functions deploy api --no-verify-jwt
+```
+
+Redeploying only the frontend leaves voucher posters showing an explicit duration-data-unavailable warning until the API is updated.
+
+### Printing and fixed QR placement
+
+Choose **Print** on an existing promotion to open the approved A4 poster in its own print window and invoke the browser print dialog. It uses saved data, not unsaved editor drafts. **Print A4** in the sharing dialog prints its current QR/placeholder selection. The print window retains a reprint button; canceling the browser dialog is not reported as a successful print.
+
+`src/poster-layout.ts` is the canonical geometry for printing, SVG previews, PNG exports, and QR insertion. Each generated SVG embeds its placement map as metadata. Coordinates below start at the top-left of an A4 portrait page at 100% / Actual size with zero CSS page margins:
+
+| Region | SVG rectangle (x, y, width, height) | A4 rectangle in mm, rounded |
+|---|---|---|
+| Visible QR frame | `58, 847, 216, 216` | `15.34, 224.01, 57.13, 57.13` |
+| QR insertion area, including its own quiet zone | `74, 863, 184, 184` | `19.57, 228.24, 48.66, 48.66` |
+
+The viewBox is `794 × 1123`; the PNG is `2480 × 3508`. The insertion area is approximately `x=231, y=2696, 575 × 575 px` in that PNG. Preserve the surrounding white space. Disable browser headers/footers; printer “fit to page” or hardware margins can change physical placement.
+
+
 
 ## Admin access
 

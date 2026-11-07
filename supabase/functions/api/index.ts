@@ -74,7 +74,7 @@ function requiredUuid(body: JsonBody, key: string, label: string): string {
   return value;
 }
 
-type VoucherRow = { code: string; duration_label: string | null; branch_id: string };
+type VoucherRow = { code: string; duration_label: string; branch_id: string };
 
 function parseVoucherRows(value: unknown): VoucherRow[] {
   if (!Array.isArray(value) || value.length === 0) {
@@ -94,10 +94,11 @@ function parseVoucherRows(value: unknown): VoucherRow[] {
     if (!VOUCHER_CODE_PATTERN.test(code)) throw new HttpError(400, `Voucher row ${index + 1} has an invalid code.`, 'VALIDATION_ERROR');
 
     const durationValue = input.durationLabel;
-    const durationLabel = durationValue === undefined || durationValue === null || durationValue === ''
-      ? null
-      : typeof durationValue === 'string' ? durationValue.trim() : '';
-    if (durationValue !== undefined && durationValue !== null && durationValue !== '' && (!durationLabel || durationLabel.length > 80)) {
+    const durationLabel = typeof durationValue === 'string' ? durationValue.trim() : '';
+    if (!durationLabel) {
+      throw new HttpError(400, `Voucher row ${index + 1} requires a duration. Set the batch time or provide a duration for every row.`, 'VOUCHER_DURATION_REQUIRED');
+    }
+    if (durationLabel.length > 80) {
       throw new HttpError(400, `Voucher row ${index + 1} has an invalid duration label.`, 'VALIDATION_ERROR');
     }
 
@@ -115,6 +116,32 @@ function parseVoucherRows(value: unknown): VoucherRow[] {
   if (!rows.length) throw new HttpError(400, 'No valid voucher codes found.', 'VALIDATION_ERROR');
   return rows;
 }
+
+function voucherDurationSummary<T extends { duration_label: string | null }>(
+  vouchers: T[],
+): { voucherDurationLabels: string[]; voucherHasUndeclaredDuration: boolean } {
+  const labels = new Map<string, string>();
+  let voucherHasUndeclaredDuration = false;
+  for (const voucher of vouchers) {
+    const label = voucher.duration_label?.trim() || '';
+    if (!label) {
+      voucherHasUndeclaredDuration = true;
+      continue;
+    }
+    const key = label.toLocaleLowerCase('en');
+    const existing = labels.get(key);
+    if (!existing || label < existing) labels.set(key, label);
+  }
+  return {
+    voucherDurationLabels: [...labels.values()].sort((a, b) => {
+      const left = a.toLocaleLowerCase('en');
+      const right = b.toLocaleLowerCase('en');
+      return left < right ? -1 : left > right ? 1 : a < b ? -1 : a > b ? 1 : 0;
+    }),
+    voucherHasUndeclaredDuration,
+  };
+}
+
 
 async function validateVoucherBranches(rows: VoucherRow[]): Promise<void> {
   const branchIds = [...new Set(rows.map((row) => row.branch_id))];
@@ -286,11 +313,11 @@ async function loadPublicData(request: Request) {
     { data: unassignedVouchers, error: vouchersError },
     profile,
   ] = await Promise.all([
-    client.from('promotions').select('id,name,description,audience,fulfillment_type,requires_student_document,published_at').eq('active', true).eq('published', true).order('published_at', { ascending: false }),
+    client.from('promotions').select('id,name,description,audience,fulfillment_type,requires_student_document,declared_duration,published_at').eq('active', true).eq('published', true).order('published_at', { ascending: false }),
     client.from('promotion_slots').select('promotion_id,branch_id,capacity,approved_count').eq('branch_id', context.branchId),
     client.from('promo_requests').select('id,promotion_id,branch_id,status,voucher_code,created_at,reviewed_at,promotions(name),branches(name)').eq('profile_id', context.id).order('created_at', { ascending: false }),
     client.from('issues').select('id,issue_type,unit,amount_inserted,amount_credited,points_lost,description,status,created_at,reviewed_at,branches(name)').eq('profile_id', context.id).order('created_at', { ascending: false }),
-    client.from('promotion_vouchers').select('promotion_id').eq('branch_id', context.branchId).is('assigned_profile_id', null),
+    client.from('promotion_vouchers').select('promotion_id,duration_label').eq('branch_id', context.branchId).is('assigned_profile_id', null),
     getProfileState(context),
   ]);
   if (promotionsError || slotsError || requestsError || issuesError || vouchersError) {
@@ -302,8 +329,12 @@ async function loadPublicData(request: Request) {
   const voucherByPromotion = new Map((requests || []).map((item) => [item.promotion_id, item.voucher_code]));
 
   const unassignedCounts = new Map<string, number>();
+  const unassignedVoucherRows = new Map<string, Array<{ duration_label: string | null }>>();
   for (const voucher of unassignedVouchers || []) {
     unassignedCounts.set(voucher.promotion_id, (unassignedCounts.get(voucher.promotion_id) || 0) + 1);
+    const rows = unassignedVoucherRows.get(voucher.promotion_id) || [];
+    rows.push(voucher);
+    unassignedVoucherRows.set(voucher.promotion_id, rows);
   }
 
   const publicPromotions = (promotions || []).flatMap((promotion) => {
@@ -333,10 +364,12 @@ async function loadPublicData(request: Request) {
       fulfillmentType: promotion.fulfillment_type || 'manual_topup',
       requiresStudentDocument: promotion.requires_student_document,
       branchId: context.branchId,
+      declaredDuration: promotion.declared_duration,
       branchName: context.branchName,
       capacity,
       approvedCount,
       availableSlots,
+      ...voucherDurationSummary(unassignedVoucherRows.get(promotion.id) || []),
       myRequestStatus: requestByPromotion.get(promotion.id) || null,
       myVoucherCode,
       publishedAt: promotion.published_at,
@@ -545,7 +578,7 @@ async function adminLoadData() {
     vouchersResult,
   ] = await Promise.all([
     client.from('branches').select('id,name,active').order('name'),
-    client.from('promotions').select('id,name,description,audience,fulfillment_type,requires_student_document,active,published,notify_on_publish,published_at').order('created_at', { ascending: false }),
+    client.from('promotions').select('id,name,description,audience,fulfillment_type,requires_student_document,declared_duration,active,published,notify_on_publish,published_at').order('created_at', { ascending: false }),
     client.from('promotion_slots').select('promotion_id,branch_id,capacity,approved_count,branches(name)'),
     client.from('promo_requests').select('id,promotion_id,profile_id,branch_id,student_document_id,status,voucher_code,created_at,reviewed_at,promotions(name),profiles(device_id,name),branches(name)').order('created_at', { ascending: false }),
     client.from('issues').select('id,profile_id,branch_id,issue_type,unit,amount_inserted,amount_credited,points_lost,description,status,created_at,reviewed_at,profiles(device_id,name),branches(name)').order('created_at', { ascending: false }),
@@ -554,7 +587,7 @@ async function adminLoadData() {
     client.from('promotions').select('id', { count: 'exact', head: true }).eq('active', true).eq('published', true),
     client.from('push_subscriptions').select('id', { count: 'exact', head: true }).eq('active', true),
     client.from('audit_logs').select('id,action,target_type,target_id,outcome,created_at').order('created_at', { ascending: false }).limit(12),
-    client.from('promotion_vouchers').select('promotion_id,branch_id,assigned_profile_id'),
+    client.from('promotion_vouchers').select('promotion_id,branch_id,assigned_profile_id,duration_label'),
   ]);
   const firstError = branchesResult.error || promotionsResult.error || slotsResult.error || requestsResult.error || issuesResult.error || pendingRequestsResult.error || pendingIssuesResult.error || activePromotionsResult.error || subscribersResult.error || auditLogsResult.error || vouchersResult.error;
   if (firstError) throw new Error(firstError.message);
@@ -570,11 +603,17 @@ async function adminLoadData() {
 
   const voucherStatsByPromo = new Map<string, { total: number; unassigned: number; assigned: number }>();
   const voucherStatsByPromoBranch = new Map<string, { total: number; unassigned: number; assigned: number }>();
+  const availableVoucherRowsByPromo = new Map<string, Array<{ duration_label: string | null }>>();
   for (const v of vouchersResult.data || []) {
     const curr = voucherStatsByPromo.get(v.promotion_id) || { total: 0, unassigned: 0, assigned: 0 };
     curr.total += 1;
     if (v.assigned_profile_id) curr.assigned += 1;
-    else curr.unassigned += 1;
+    else {
+      curr.unassigned += 1;
+      const rows = availableVoucherRowsByPromo.get(v.promotion_id) || [];
+      rows.push(v);
+      availableVoucherRowsByPromo.set(v.promotion_id, rows);
+    }
     voucherStatsByPromo.set(v.promotion_id, curr);
 
     if (v.branch_id) {
@@ -631,6 +670,7 @@ async function adminLoadData() {
       audience: promotion.audience,
       fulfillmentType: promotion.fulfillment_type || 'manual_topup',
       requiresStudentDocument: promotion.requires_student_document,
+      declaredDuration: promotion.declared_duration,
       active: promotion.active,
       published: promotion.published,
       notifyOnPublish: promotion.notify_on_publish,
@@ -638,6 +678,7 @@ async function adminLoadData() {
       voucherTotalCount: vStats.total,
       voucherUnassignedCount: vStats.unassigned,
       voucherAssignedCount: vStats.assigned,
+      ...voucherDurationSummary(availableVoucherRowsByPromo.get(promotion.id) || []),
       voucherPools: isVoucher ? voucherPools : undefined,
       slots,
     };
@@ -740,6 +781,14 @@ async function adminSaveBranch(adminUserId: string, body: JsonBody) {
 async function adminSavePromotion(adminUserId: string, body: JsonBody) {
   const name = requiredString(body, 'name', 'Promo name', 160);
   const description = optionalString(body, 'description', 500);
+  const declaredDurationInput = body.declaredDuration;
+  if (declaredDurationInput !== undefined && declaredDurationInput !== null && typeof declaredDurationInput !== 'string') {
+    throw new HttpError(400, 'Declared duration is invalid.', 'VALIDATION_ERROR');
+  }
+  const declaredDuration = typeof declaredDurationInput === 'string' ? declaredDurationInput.trim() || null : null;
+  if (declaredDuration !== null && declaredDuration.length > 80) {
+    throw new HttpError(400, 'Declared duration is invalid.', 'VALIDATION_ERROR');
+  }
   const audience = requiredString(body, 'audience', 'Audience', 20);
   if (!['everyone', 'students'].includes(audience)) throw new HttpError(400, 'Audience is invalid.', 'VALIDATION_ERROR');
   const fulfillmentType = body.fulfillmentType === 'voucher' ? 'voucher' : 'manual_topup';
@@ -786,6 +835,7 @@ async function adminSavePromotion(adminUserId: string, body: JsonBody) {
     audience,
     fulfillment_type: fulfillmentType,
     requires_student_document: requiresStudentDocument,
+    declared_duration: declaredDuration,
     published,
     active,
     notify_on_publish: notifyOnPublish,

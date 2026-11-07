@@ -4542,3 +4542,236 @@ code {
     width: 100%;
   }
 }
+/* ==========================================================================
+   A4 Promo Poster Sharing
+   ========================================================================== */
+.share-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: clamp(12px, 3vw, 30px);
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(6px);
+}
+
+.share-dialog-card {
+  width: min(100%, 760px);
+  max-width: 760px;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  padding: clamp(16px, 3vw, 26px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: #111a26;
+  color: #ffffff;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(249, 115, 22, 0.12);
+}
+
+.poster-share-section {
+  display: grid;
+  gap: 14px;
+}
+
+.poster-share-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.poster-share-heading h4 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 1.05rem;
+}
+
+.poster-share-heading p {
+  margin: 4px 0 0;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+}
+
+.poster-size-badge {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid rgba(253, 186, 116, 0.34);
+  border-radius: 999px;
+  color: #fed7aa;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.poster-preview-frame {
+  display: flex;
+  min-height: 260px;
+  max-height: 60vh;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: #202936;
+}
+
+.poster-preview-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: calc(60vh - 26px);
+  height: auto;
+  aspect-ratio: 210 / 297;
+  object-fit: contain;
+  background: #fffefa;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.42);
+}
+
+.poster-preview-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 0;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.poster-duration-note {
+  margin: -3px 0 0;
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.poster-duration-note strong {
+  color: #fed7aa;
+}
+
+.poster-duration-note.is-warning,
+.poster-share-error {
+  color: #fecaca;
+}
+
+.poster-duration-note.is-warning strong {
+  color: #fca5a5;
+}
+
+.poster-qr-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+}
+
+.poster-qr-options legend {
+  padding: 0 5px;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.poster-qr-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #f1f5f9;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.poster-qr-options input {
+  accent-color: #f97316;
+}
+
+.poster-share-error {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.poster-download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.poster-download-actions > button {
+  flex: 1 1 190px;
+  justify-content: center;
+}
+
+.poster-download-actions > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.poster-busy-note {
+  margin: -8px 0 0;
+  color: #cbd5e1;
+  font-size: 0.76rem;
+}
+
+.batch-duration-control {
+  padding: 12px;
+  border: 1px solid rgba(253, 186, 116, 0.24);
+  border-radius: 10px;
+  background: rgba(249, 115, 22, 0.06);
+}
+
+.batch-duration-control .admin-label {
+  display: block;
+  margin-bottom: 7px;
+  color: #fed7aa;
+}
+
+.importer-batch-duration-preview {
+  display: block;
+  margin-top: 7px;
+  color: #bbf7d0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+@media (max-width: 560px) {
+  .share-modal-backdrop {
+    padding: 8px;
+  }
+
+  .share-dialog-card {
+    max-height: calc(100dvh - 16px);
+    border-radius: 12px;
+  }
+
+  .poster-preview-frame {
+    min-height: 200px;
+    max-height: 52vh;
+    padding: 8px;
+  }
+
+  .poster-preview-image {
+    max-height: calc(52vh - 18px);
+  }
+
+  .share-input-row,
+  .share-modal-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .share-input-row > *,
+  .share-modal-actions > * {
+    width: 100%;
+  }
+}
