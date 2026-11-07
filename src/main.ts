@@ -899,7 +899,7 @@ function openShareModal(promo: Promotion | AdminPromotion, opener: HTMLElement |
     durationNote: duration.durationNote,
     durationDataUnavailable: duration.dataUnavailable,
     branchLabel,
-    qrMode: 'placeholder',
+    qrMode: 'qr',
     posterSvg: '',
     posterPreviewUrl: '',
     posterLoading: true,
@@ -911,7 +911,7 @@ function openShareModal(promo: Promotion | AdminPromotion, opener: HTMLElement |
   state.shareModal = modal;
   shareModalReturnPromotionId = opener?.dataset.promotionId || promo.id;
   shareModalNeedsFocus = true;
-  void refreshSharePoster(modal, 'placeholder');
+  void refreshSharePoster(modal, 'qr');
 }
 
 async function printSharePoster(): Promise<void> {
@@ -970,12 +970,15 @@ async function printExistingPromo(promo: AdminPromotion, printWindow: Window): P
 
   try {
     const duration = getPromoDurationSummary(promo);
+    const promoUrl = `${window.location.origin}${window.location.pathname}#/promo/${promo.id}`;
+    const qrSvg = await generateQrSvg(promoUrl);
     const posterSvg = await createPromoPosterSvg({
       title: promo.name,
       description: promo.description?.trim() || '',
       durationLabel: duration.durationLabel,
       durationNote: duration.durationNote || undefined,
       branchLabel: getPromoBranchLabel(promo),
+      qrSvg,
     });
     await printPosterSvg(printWindow, posterSvg, promo.name);
   } catch (error) {

@@ -97,7 +97,7 @@ They check voucher saving and rollback, branch isolation, duplicate preservation
 
 - **Quick Paste Codes:** paste comma-separated codes and enter **Common Batch Voucher Duration** once (for example, `1 Hour`). Every code without its own time receives that duration.
 - **Spreadsheet imports:** use the same common duration for rows without a time. A duration supplied by a spreadsheet row takes precedence. New voucher imports require a declared time for every row; existing legacy inventory remains readable.
-- **Share / QR:** the sharing dialog previews the saved promo title, description, and declared promo time on the approved A4 poster. It defaults to an empty QR box for later placement; choose **Add a scannable promo QR** to embed the actual promo link. Private voucher codes are never printed.
+- **Share / QR:** the sharing dialog previews the saved promo title, description, and declared promo time on the approved A4 poster. It automatically includes the QR for that specific promo link. Choose **Leave an empty QR placeholder** only when intentionally preparing blank artwork for later placement. Private voucher codes are never printed.
 - Download a **2480 × 3508 PNG with 300-dpi metadata** or a self-contained **210 × 297 mm SVG**. The embedded poster fonts are self-hosted, with their SIL Open Font Licenses in `src/assets/poster/`.
 - **Declared promo time:** edit this optional field on any existing or new promotion. It is stored separately in `promotions.declared_duration` (up to 80 characters), takes priority on posters, and does not rewrite imported voucher times or customer claims. Clearing it restores the inventory-derived fallback: a single known available time is shown exactly, while mixed/undeclared inventory and manual top-ups are labelled honestly.
 
@@ -114,7 +114,7 @@ Redeploying only the frontend leaves voucher posters showing an explicit duratio
 
 ### Printing and fixed QR placement
 
-Choose **Print** on an existing promotion to open the approved A4 poster in its own print window and invoke the browser print dialog. It uses saved data, not unsaved editor drafts. **Print A4** in the sharing dialog prints its current QR/placeholder selection. The print window retains a reprint button; canceling the browser dialog is not reported as a successful print.
+Choose **Print** on an existing promotion to open the approved A4 poster with that promotion's scannable QR and invoke the browser print dialog. It uses saved data, not unsaved editor drafts. **Print A4** in the sharing dialog prints its current selection, which defaults to the populated promo QR; a blank QR area is printed only if explicitly selected. The print window retains a reprint button; canceling the browser dialog is not reported as a successful print.
 
 `src/poster-layout.ts` is the canonical geometry for printing, SVG previews, PNG exports, and QR insertion. Each generated SVG embeds its placement map as metadata. Coordinates below start at the top-left of an A4 portrait page at 100% / Actual size with zero CSS page margins:
 
